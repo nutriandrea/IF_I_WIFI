@@ -1,10 +1,171 @@
 # Smart Environment Hub — Arduino UNO Q
 
-> Trasforma segnali WiFi ambientali in un sistema di **rilevamento presenza passivo**, combinato con sensori ambientali per passare da **automazione semplice** a **intelligenza contestuale** — tutto su Arduino UNO Q, senza cloud, senza telecamere, senza wearable.
+> Rilevamento presenza passivo via RSSI WiFi + sensori ambientali su Arduino UNO Q.
+> Comunicazione STM32↔Linux via **Bridge RPC** (MessagePack su Unix socket), non via seriale.
 
 ---
 
-## Architettura
+## Board: Arduino UNO Q
+
+| Caratteristica | Dettaglio |
+|---------------|-----------|
+| **MPU** (Linux) | Qualcomm Dragonwing QRB2210 (quad-core 2.0 GHz, Debian trixie) |
+| **MCU** (real-time) | STM32U585 (Arm Cortex-M33, 160 MHz, Zephyr RTOS) |
+| **RAM** | 2 GB LPDDR4 (Linux) + 786 KB SRAM (MCU) |
+| **WiFi** | Qualcomm integrato (wlan0, 2.4 GHz) |
+| **Python** | 3.13.5 |
+| **Comunicazione MPU↔MCU** | Bridge RPC (`arduino-router`, Unix socket msgpack) |
+| **UART fisica** | `/dev/ttyHS1` a 115200 baud (gestita dal router) |
+
+---
+
+## Architettura — Bridge RPC
+
+Sulla UNO Q la comunicazione tra STM32 e Qualcomm passa per il servizio **`arduino-router`** (Go), non per una `/dev/tty*` tradizionale.
+
+```
+STM32 (sketch)                 arduino-router                     Python
+┌──────────────────┐    ┌─────────────────────────┐    ┌──────────────────┐
+│ Bridge.begin()   │    │ /usr/bin/arduino-router  │    │ bridge_client.py  │
+│ Bridge.provide() │◄──►│  --serial-port ttyHS1   │◄──►│ RouterRPC.call()  │
+│ Monitor.println()│    │  --serial-baudrate 115200│    │ msgpack socket    │
+└──────────────────┘    │  --unix-port .sock      │    └──────────────────┘
+                        └─────────────────────────┘
+```
+
+Il router e preinstallato e attivo di default. Ascolta su `/var/run/arduino-router.sock` e si connette allo STM32 via `/dev/ttyHS1` a **115200 baud**.
+
+**Perche non funziona `Serial.begin(9600)`?** Perche lo STM32 non espone una seriale classica verso Linux. `Serial.print` va al **USB CDC ACM** (visibile solo collegando la UNO Q a un PC). La comunicazione interna e gestita dal router via MessagePack RPC.
+
+---
+
+## Risultati test di fattibilita
+
+Eseguito sulla UNO Q reale (14/05/2026, 2 iterazioni).
+
+| Test | Run 1 | Run 2 | Dettaglio |
+|------|-------|-------|-----------|
+| **RSSI Sampling** | ✅ PASS | ✅ PASS | 2.0 Hz, 0 errori, jitter 0.001s |
+| **Feature Extraction** | ✅ PASS | ✅ PASS | 0.99ms (pure Python, no numpy) |
+| **UART tradizionale** | ❌ FAIL | ❌ FAIL | /dev/ttyHS1 e occupato dal router |
+| **Bridge RPC** | 🔶 N/A | 🔶 N/A | Upload sketch su STM32 necessario |
+| **System Load** | ✅ PASS | ✅ PASS | CPU 0.2%, RAM 20% |
+| **Presence Detection** | ❌ FAIL | ✅ PASS | std 4.66→1.71 (soglia 2.0 fragile) |
+| **Combined Pipeline** | ✅ PASS | ✅ PASS | 59 loop, 2.0/s, 0 errori |
+
+### Scoperte chiave
+
+- **RSSI**: `iw link` stabile a 2 Hz su wlan0. `/usr/sbin/iw`.
+- **Niente `/proc/net/wireless`**: driver Qualcomm non espone statistiche raw.
+- **Comunicazione MCU**: va via `arduino-router`, non via `/dev/tty*`.
+- **Router attivo**: da boot, memoria 10.4 MB, CPU irrisoria.
+- **Baud rate corretto**: 115200. Sketch legacy usa 9600 — mismatch.
+- **Presenza**: rilevabile ma soglia fragile. Serve **adaptive delta** (non std fisso).
+
+---
+
+## Codice
+
+### MCU — `feasibility_bridge.ino`
+
+```cpp
+#include "Arduino_RouterBridge.h"
+
+void setup() {
+    Bridge.begin();   // Connessione arduino-router via ttyHS1 a 115200
+    Bridge.provide("get_sensors", read_and_return_csv);
+    Bridge.provide("ping", ping);
+    Bridge.provide("set_relay", set_relay);
+    Monitor.begin();
+    Monitor.println("MCU ready");
+}
+```
+
+Espone RPC: `ping()`, `get_sensors()` (CSV: `ts,temp,hum,air,light`), `set_relay(0|1)`.
+
+### Python — `bridge_client.py`
+
+```bash
+python3 bridge_client.py ping              # -> True
+python3 bridge_client.py get_sensors       # -> "ts,24.5,55,320,412"
+python3 bridge_client.py set_relay 1       # Accende relay
+python3 bridge_client.py discover          # Scopre metodi registrati
+```
+
+Include msgpack encoder/decoder built-in. Nessuna dipendenza esterna.
+
+### RSSI sampling
+
+```python
+IW = "/usr/sbin/iw"
+def get_rssi():
+    r = subprocess.check_output(f"{IW} dev wlan0 link", shell=True, timeout=3)
+    return float(r.decode().split("signal:")[1].split("dBm")[0])
+```
+
+Risultato reale: **2.0 Hz, 0 errori**, segnale -47 a -36 dBm su wlan0.
+
+### Presence detection (adaptive)
+
+```python
+class AdaptivePresenceDetector:
+    def __init__(self, window_size=20, delta_threshold=1.5):
+        self.window = deque(maxlen=window_size)
+        self.delta_threshold = delta_threshold
+
+    def update(self, rssi):
+        self.window.append(rssi)
+        if len(self.window) < 10:
+            return False
+        recent = list(self.window)[-5:]
+        delta = abs(mean(recent) - mean(self.window))
+        return delta > self.delta_threshold
+```
+
+**Calibrazione**: `python3 calibrate_presence.py --mode quick`
+
+---
+
+## Setup rapido
+
+```bash
+# Sul computer: carica sketch sullo STM32
+# 1. Apri feasibility_bridge.ino in Arduino IDE
+# 2. Board: Arduino UNO Q (STM32)
+# 3. Carica via USB-C
+
+# Sulla UNO Q (via SSH):
+cd ~/ArduinoApps/ArduinoWifiSensing
+git pull
+sudo apt-get install -y iw
+pip install msgpack
+
+# Test comunicazione STM32
+python3 bridge_client.py ping
+python3 bridge_client.py get_sensors
+
+# Calibrazione presenza
+python3 calibrate_presence.py --mode quick
+
+# Test di fattibilita completo
+python3 feasibility_test.py
+```
+
+---
+
+## File del progetto
+
+| File | Ruolo |
+|------|-------|
+| `feasibility_test.py` | Test automatico (RSSI, features, load, bridge, pipeline) |
+| `feasibility_bridge.ino` | **Sketch MCU con Arduino_RouterBridge (RPC)** |
+| `feasibility_test.ino` | Sketch MCU legacy con Serial (solo per debug USB→PC) |
+| `bridge_client.py` | Client Python per RPC via arduino-router Unix socket |
+| `calibrate_presence.py` | Calibrazione soglia presenza RSSI |
+| `arduino_cloud_integration.md` | Integrazione Arduino Cloud |
+| `shopping_list.md` | Componenti e budget |
+| `demo_24h_plan.md` | Piano demo 24h |
+| `TESTING.md` | Guida esecuzione test |
 
 ```
 [Sensori MCU]              [WiFi RSSI (Linux)]       [Decision Engine]

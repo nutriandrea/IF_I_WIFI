@@ -441,6 +441,139 @@ def test_serial_communication():
 
 
 # ============================================================
+# Test 3b: Bridge RPC Communication (via arduino-router)
+# ============================================================
+ROUTER_SOCKET = "/var/run/arduino-router.sock"
+
+def _msgpack_encode(obj):
+    """Minimal msgpack encoder per i tipi che usiamo."""
+    if isinstance(obj, bool):
+        return b'\xc3' if obj else b'\xc2'
+    elif obj is None:
+        return b'\xc0'
+    elif isinstance(obj, int):
+        if 0 <= obj < 128: return bytes([obj])
+        elif -32 <= obj < 0: return bytes([obj & 0xff])
+        elif obj < 256: return b'\xcc' + bytes([obj])
+        elif obj < 65536: return b'\xcd' + struct.pack('>H', obj)
+        else: return b'\xce' + struct.pack('>I', obj)
+    elif isinstance(obj, str):
+        data = obj.encode()
+        n = len(data)
+        if n < 32: return bytes([0xa0 | n]) + data
+        elif n < 256: return b'\xd9' + bytes([n]) + data
+        else: return b'\xda' + struct.pack('>H', n) + data
+    elif isinstance(obj, (list, tuple)):
+        n = len(obj)
+        buf = bytes([0x90 | n]) if n < 16 else b'\xdc' + struct.pack('>H', n)
+        for item in obj: buf += _msgpack_encode(item)
+        return buf
+    return b''
+
+def _msgpack_decode(data, pos=0):
+    """Minimal msgpack decoder."""
+    b = data[pos]; pos += 1
+    if b <= 0x7f: return b, pos
+    if b >= 0xe0: return b - 256, pos
+    if 0xa0 <= b <= 0xbf:
+        n = b & 0x1f
+        return data[pos:pos+n].decode(), pos+n
+    if b == 0xc0: return None, pos
+    if b == 0xc2: return False, pos
+    if b == 0xc3: return True, pos
+    if b == 0xcb:
+        return struct.unpack('>d', data[pos:pos+8])[0], pos+8
+    if 0xcc <= b <= 0xce:
+        sizes = {0xcc: 1, 0xcd: 2, 0xce: 4}
+        n = int.from_bytes(data[pos:pos+sizes[b]], 'big')
+        return n, pos + sizes[b]
+    if 0x90 <= b <= 0x9f:
+        n = b & 0x0f; result = []
+        for _ in range(n): val, pos = _msgpack_decode(data, pos); result.append(val)
+        return result, pos
+    if b == 0xdc:
+        n = struct.unpack('>H', data[pos:pos+2])[0]; pos += 2; result = []
+        for _ in range(n): val, pos = _msgpack_decode(data, pos); result.append(val)
+        return result, pos
+    if b == 0xd9:
+        n = data[pos]; pos += 1
+        return data[pos:pos+n].decode(), pos+n
+    raise ValueError(f"Unknown msgpack byte: 0x{b:02x}")
+
+def _rpc_call(method, *params, timeout=3):
+    """Chiamata RPC via arduino-router Unix socket. Ritorna risultato o None."""
+    msgid = 1
+    request = [0, msgid, method, list(params)]
+    packed = _msgpack_encode(request)
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(timeout)
+            s.connect(ROUTER_SOCKET)
+            s.sendall(packed)
+            resp_data = s.recv(65536)
+        if not resp_data:
+            return None
+        result, _ = _msgpack_decode(resp_data)
+        if isinstance(result, list) and len(result) >= 4:
+            return result[3]  # [RESPONSE, msgid, error, result]
+        return result
+    except (socket.timeout, ConnectionRefusedError, OSError, ValueError):
+        return None
+
+def test_bridge_rpc():
+    print("\n=== Test 3b: Bridge RPC Communication ===")
+    if not os.path.exists(ROUTER_SOCKET):
+        log_test("Bridge RPC", False,
+                 f"Socket {ROUTER_SOCKET} non trovata — arduino-router non in esecuzione?",
+                 {"socket": ROUTER_SOCKET, "hint": "systemctl status arduino-router"})
+        return
+
+    # Check router status via systemctl
+    router_ok = False
+    try:
+        r = subprocess.check_output(
+            "systemctl is-active arduino-router", shell=True, timeout=3
+        ).decode().strip()
+        router_ok = (r == "active")
+    except Exception:
+        pass
+
+    if not router_ok:
+        log_test("Bridge RPC", False,
+                 "arduino-router non attivo",
+                 {"hint": "sudo systemctl start arduino-router"})
+        return
+
+    print(f"  Router: active, socket: {ROUTER_SOCKET}")
+
+    # Ping MCU
+    t0 = time.time()
+    result = _rpc_call("ping", timeout=3)
+    latency = (time.time() - t0) * 1000
+
+    if result is True or result == "true":
+        log_test("Bridge RPC", True,
+                 f"STM32 risponde a ping ({latency:.0f}ms)",
+                 {"ping_ok": True, "latency_ms": round(latency, 1)})
+
+        # Test get_sensors
+        sensors = _rpc_call("get_sensors", timeout=3)
+        if sensors and isinstance(sensors, str) and sensors.count(",") >= 3:
+            log_test("Bridge RPC — get_sensors", True,
+                     f"Sensori ricevuti: {sensors}",
+                     {"raw": sensors})
+        else:
+            log_test("Bridge RPC — get_sensors", False,
+                     f"get_sensors fallito: {sensors}",
+                     {"raw": str(sensors)})
+    else:
+        log_test("Bridge RPC", False,
+                 f"STM32 non risponde a ping ({latency:.0f}ms)",
+                 {"ping_ok": False, "latency_ms": round(latency, 1),
+                  "hint": "Lo sketch feasibility_bridge.ino e caricato sullo STM32?"})
+
+
+# ============================================================
 # Test 4: CPU & Memory Load
 # ============================================================
 def test_system_load():
@@ -564,6 +697,14 @@ def install_deps(tools):
             if rc == 0:
                 installed.append("pyserial")
 
+    # msgpack per RPC bridge
+    try:
+        import msgpack
+    except ImportError:
+        print("  Installing python3-msgpack...")
+        rc = subprocess.call("pip3 install msgpack", shell=True, timeout=30)
+        (installed if rc == 0 else failed).append("msgpack")
+
     if installed:
         print(f"  Installed: {', '.join(installed)}")
     if failed:
@@ -609,6 +750,7 @@ def main():
     rssi_samples, sampler = test_rssi_sampling(tools, interfaces)
     test_feature_extraction(rssi_samples)
     test_serial_communication()
+    test_bridge_rpc()           # RPC via arduino-router (UNO Q native)
     test_system_load()
     test_presence_detection(rssi_samples)
     test_combined_pipeline(sampler)
