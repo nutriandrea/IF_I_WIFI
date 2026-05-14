@@ -377,6 +377,8 @@ def main():
                         help="Durata monitor in secondi (default: 10)")
     parser.add_argument("--monitor-scan", action="store_true",
                         help="Scansiona porta Monitor TCP")
+    parser.add_argument("--test-uart", action="store_true",
+                        help="Test UART D0/D1 (loopback o ESP32)")
     parser.add_argument("--benchmark", action="store_true",
                         help="Benchmark throughput RPC")
     parser.add_argument("--list-methods", action="store_true",
@@ -423,7 +425,7 @@ def main():
         else:
             print("    (nessun metodo trovato o $/listMethods non supportato)")
             print("    Metodi noti del router: $/serial/open, $/serial/close")
-            print("    Metodi MCU attesi: ping, get_sensors, set_relay")
+            print("    Metodi MCU attesi: ping, get_sensors, set_relay, test_uart")
 
     # --- Ping ---
     elif args.ping:
@@ -463,6 +465,26 @@ def main():
             print(f"  ✅ Relay: {'ON' if result else 'OFF'}")
         else:
             print(f"  ❌ Comando fallito")
+
+    # --- Test UART D0/D1 ---
+    elif args.test_uart:
+        print("\n  --- Test UART D0/D1 ---")
+        print(f"  Chiamata RPC: test_uart()...")
+        result = client.call("test_uart", timeout=5)
+        if result is not None:
+            result_str = str(result)
+            if result_str == "LOOPBACK_OK":
+                print(f"  ✅ Loopback OK — D0/D1 UART funziona (cortocircuita con jumper)")
+            elif result_str == "ESP32_OK":
+                print(f"  ✅ ESP32 risponde su D0/D1")
+            elif result_str.startswith("FAIL"):
+                print(f"  ❌ {result_str}")
+                print(f"     D0-D1 sono cortocircuitati (jumper)? O ESP32 accesa?")
+            else:
+                print(f"  ⚠️  Risposta inattesa: {result_str}")
+        else:
+            print(f"  ❌ STM32 non raggiungibile o test_uart non registrato")
+            print(f"     Lo sketch modificato e caricato sullo STM32?")
 
     # --- Monitor scan ---
     elif args.monitor_scan:
