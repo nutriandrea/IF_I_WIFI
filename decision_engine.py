@@ -245,8 +245,8 @@ class GradientDetector:
             if recent_grads:
                 max_abs_grad = max(abs(g) for g in recent_grads)
                 gs = (max_abs_grad - self.baseline_grad_mean) / max(self.baseline_grad_std, 0.1)
-                score += max(0, gs)
                 if gs > self.grad_threshold:
+                    score += gs
                     reasons.append(f"grad={max_abs_grad:.1f}")
 
             # 2. Consecutive same-sign
