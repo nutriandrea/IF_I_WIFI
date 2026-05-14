@@ -47,10 +47,14 @@ static unsigned long _blink_until = 0;
 static int _blink_count = 0;
 static int _blink_target = 0;
 static bool _blink_state = false;
+static int _blink_ms_on = 0;
+static int _blink_ms_off = 0;
 
 static void blink_start(int n, int ms_on = 80, int ms_off = 80) {
     _blink_target = n;
     _blink_count = 0;
+    _blink_ms_on = ms_on;
+    _blink_ms_off = ms_off;
     _blink_state = false;
     _blink_until = 0;
     digitalWrite(LED_BUILTIN, LOW);
