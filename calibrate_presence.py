@@ -384,8 +384,12 @@ def main():
             if reports:
                 with open(reports[-1]) as f:
                     rep = json.load(f)
-                th = rep.get("recommended", {}).get("adaptive_delta_threshold", 1.5)
-                print(f"  Soglia dal report: {th}")
+                th = rep.get("recommended", {}).get("adaptive_delta_threshold")
+                if th is None:
+                    th = 1.5
+                    print(f"  Report senza soglia valida — uso default {th}")
+                else:
+                    print(f"  Soglia dal report: {th}")
                 monitor(iface, th)
             else:
                 print("  Nessun report trovato. Uso soglia default: 1.5")

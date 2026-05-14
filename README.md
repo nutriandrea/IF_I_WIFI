@@ -1,475 +1,274 @@
-# Smart Environment Hub — Arduino UNO Q
+# If-I-Wi-Fy — Wi-Fi Sensing on Arduino UNO Q
 
-> Rilevamento presenza passivo via RSSI WiFi + sensori ambientali su Arduino UNO Q.
-> Comunicazione STM32↔Linux via **Bridge RPC** (MessagePack su Unix socket), non via seriale.
+> *Ambient intelligence through the radio waves that already surround you.*
 
----
+Privacy-preserving presence and motion detection using nothing but the Wi-Fi that already fills the room. Built on the **Arduino UNO Q** — the dual-brain board that fuses a Linux AI processor (Qualcomm Dragonwing QRB2210) with a real-time microcontroller (STM32U585) in a single device.
 
-## Board: Arduino UNO Q
+No cameras. No wearables. No new infrastructure. The walls hum with information; we just listen.
 
-| Caratteristica | Dettaglio |
-|---------------|-----------|
-| **MPU** (Linux) | Qualcomm Dragonwing QRB2210 (quad-core 2.0 GHz, Debian trixie) |
-| **MCU** (real-time) | STM32U585 (Arm Cortex-M33, 160 MHz, Zephyr RTOS) |
-| **RAM** | 2 GB LPDDR4 (Linux) + 786 KB SRAM (MCU) |
-| **WiFi** | Qualcomm integrato (wlan0, 2.4 GHz) |
-| **Python** | 3.13.5 |
-| **Comunicazione MPU↔MCU** | Bridge RPC (`arduino-router`, Unix socket msgpack) |
-| **UART fisica** | `/dev/ttyHS1` a 115200 baud (gestita dal router) |
+For the full vision and applications (eldercare, smart workplaces, energy management, privacy-first security, retail analytics, industrial safety), see [docs/VISION.md](docs/VISION.md).
 
 ---
 
-## Architettura — Bridge RPC
+## Two sensing pipelines, one platform
 
-Sulla UNO Q la comunicazione tra STM32 e Qualcomm passa per il servizio **`arduino-router`** (Go), non per una `/dev/tty*` tradizionale.
+This repository contains two independent pipelines that share the same Arduino UNO Q hardware and the same Python orchestration layer. They differ in the physical signal they exploit.
 
-```
-STM32 (sketch)                 arduino-router                     Python
-┌──────────────────┐    ┌─────────────────────────┐    ┌──────────────────┐
-│ Bridge.begin()   │    │ /usr/bin/arduino-router  │    │ bridge_client.py  │
-│ Bridge.provide() │◄──►│  --serial-port ttyHS1   │◄──►│ RouterRPC.call()  │
-│ Monitor.println()│    │  --serial-baudrate 115200│    │ msgpack socket    │
-└──────────────────┘    │  --unix-port .sock      │    └──────────────────┘
-                        └─────────────────────────┘
-```
+| | **RSSI** | **CSI** |
+|---|---|---|
+| Signal | Received Signal Strength Indicator (coarse, single dBm value per packet) | Channel State Information (per-subcarrier amplitude + phase) |
+| Hardware needed | UNO Q only | UNO Q + ESP32 |
+| Sample rate | 2–20 Hz (`/proc/net/wireless`) | 10–100 Hz |
+| Resolution | One number per packet | 64–128 complex numbers per packet |
+| What it can detect | Coarse presence, motion bursts | Fine-grained motion, breathing rate, gait, posture (with more work) |
+| Setup complexity | Trivial | Higher (ESP32 firmware + UART bridge) |
+| Status in this repo | Working end-to-end on UNO Q | Working end-to-end on UNO Q (when ESP32+bridge are wired) |
 
-Il router e preinstallato e attivo di default. Ascolta su `/var/run/arduino-router.sock` e si connette allo STM32 via `/dev/ttyHS1` a **115200 baud**.
-
-**Perche non funziona `Serial.begin(9600)`?** Perche lo STM32 non espone una seriale classica verso Linux. `Serial.print` va al **USB CDC ACM** (visibile solo collegando la UNO Q a un PC). La comunicazione interna e gestita dal router via MessagePack RPC.
+You can start with RSSI and progress to CSI when finer sensing is needed. Both run **on-device** with no cloud dependency.
 
 ---
 
-## Risultati test di fattibilita
+## Hardware
 
-Eseguito sulla UNO Q reale (14/05/2026, 2 iterazioni).
+### Arduino UNO Q
 
-| Test | Run 1 | Run 2 | Dettaglio |
-|------|-------|-------|-----------|
-| **RSSI Sampling** | ✅ PASS | ✅ PASS | 2.0 Hz, 0 errori, jitter 0.001s |
-| **Feature Extraction** | ✅ PASS | ✅ PASS | 0.99ms (pure Python, no numpy) |
-| **UART tradizionale** | ❌ FAIL | ❌ FAIL | /dev/ttyHS1 e occupato dal router |
-| **Bridge RPC** | 🔶 N/A | 🔶 N/A | Upload sketch su STM32 necessario |
-| **System Load** | ✅ PASS | ✅ PASS | CPU 0.2%, RAM 20% |
-| **Presence Detection** | ❌ FAIL | ✅ PASS | std 4.66→1.71 (soglia 2.0 fragile) |
-| **Combined Pipeline** | ✅ PASS | ✅ PASS | 59 loop, 2.0/s, 0 errori |
+The dual-brain board that makes everything possible.
 
-### Scoperte chiave
+| Component | Role |
+|---|---|
+| Qualcomm Dragonwing QRB2210 (quad ARM A53 @ 2 GHz, Debian Linux) | Python pipeline: signal acquisition, feature extraction, ML inference, dashboard |
+| STM32U585 (ARM Cortex-M33, Zephyr OS) | Deterministic real-time I/O: sensor reads, actuators, relays, LED feedback |
+| Dual-band Wi-Fi 5 (2.4 / 5 GHz) + Bluetooth 5.1 | The sensing substrate itself (and the bridge to the network) |
+| 2 GB LPDDR4 RAM, 16 GB+ eMMC | Enough to train, run, and log ML pipelines on-device |
+| USB-C, ~€60 retail | Deployable at consumer scale |
 
-- **RSSI**: `iw link` stabile a 2 Hz su wlan0. `/usr/sbin/iw`.
-- **Niente `/proc/net/wireless`**: driver Qualcomm non espone statistiche raw.
-- **Comunicazione MCU**: va via `arduino-router`, non via `/dev/tty*`.
-- **Router attivo**: da boot, memoria 10.4 MB, CPU irrisoria.
-- **Baud rate corretto**: 115200. Sketch legacy usa 9600 — mismatch.
-- **Presenza**: rilevabile ma soglia fragile. Serve **adaptive delta** (non std fisso).
+**MCU↔Linux communication** does NOT go via a classic `/dev/tty*`. The Qualcomm side talks to the STM32 through the `arduino-router` service — a Go daemon that exposes a MessagePack RPC socket at `/var/run/arduino-router.sock`. The router is preinstalled and running by default. Internally it bridges `/dev/ttyHS1` (115200 baud, internal UART) to the Unix socket. Python clients call `client.call("method_name", args)` and the STM32 responds.
+
+### ESP32 (CSI pipeline only)
+
+A classic **ESP32** (WROOM-32 / DevKit V1) with built-in WiFi. Required only for the CSI pipeline. The ESP32 is the only widely available chip whose drivers expose per-subcarrier CSI from received 802.11 frames.
 
 ---
 
-## Codice
+## Pipeline 1 — RSSI (UNO Q standalone)
 
-### MCU — `feasibility_bridge.ino`
+Detects presence and motion from the WiFi signal strength of `wlan0` (the UNO Q's own radio). No extra hardware required.
 
-```cpp
-#include "Arduino_RouterBridge.h"
+### How it works
 
-void setup() {
-    Bridge.begin();   // Connessione arduino-router via ttyHS1 a 115200
-    Bridge.provide("get_sensors", read_and_return_csv);
-    Bridge.provide("ping", ping);
-    Bridge.provide("set_relay", set_relay);
-    Monitor.begin();
-    Monitor.println("MCU ready");
-}
-```
+1. `/proc/net/wireless` is polled at 10–20 Hz for the RSSI of the last frame received from the AP the UNO Q is associated to. Zero `subprocess` overhead.
+2. A short sliding window (~30 samples) extracts statistical features: mean, std, gradient, consecutive same-sign run length, and signal_avg from `iw station dump`.
+3. A multi-metric scoring detector fuses these signals into a `presence_score`. Above a calibrated threshold → presence.
 
-Espone RPC: `ping()`, `get_sensors()` (CSV: `ts,temp,hum,air,light`), `set_relay(0|1)`.
+### Files
 
-### Python — `bridge_client.py`
+| File | What it does |
+|---|---|
+| [enhanced_presence.py](enhanced_presence.py) | Main detector. Modes: `quick` / `baseline` / `movement` / `analyze` / `monitor` |
+| [calibrate_presence.py](calibrate_presence.py) | Legacy calibration (std + adaptive delta strategies) |
+| [monitor_presence.py](monitor_presence.py) | Monitor-mode capture (requires root, optional) |
+| [decision_engine.py](decision_engine.py) | Orchestrator: RSSI → score → STM32 relay/LED action via bridge RPC |
+| [feasibility_test.py](feasibility_test.py) | End-to-end smoke test (RSSI, features, system load, bridge, combined pipeline) |
+| [feasibility_bridge/](feasibility_bridge/) | STM32 sketch — exposes `ping`, `get_sensors`, `set_relay`, `set_led` RPCs |
+| [feasibility_test/](feasibility_test/) | Legacy STM32 sketch (USB-CDC only, no router bridge) |
+| [bridge_client.py](bridge_client.py) | CLI wrapper for arduino-router RPC (useful for ad-hoc calls) |
+
+### Quick start
 
 ```bash
-python3 bridge_client.py ping              # -> True
-python3 bridge_client.py get_sensors       # -> "ts,24.5,55,320,412"
-python3 bridge_client.py set_relay 1       # Accende relay
-python3 bridge_client.py discover          # Scopre metodi registrati
-```
-
-Include msgpack encoder/decoder built-in. Nessuna dipendenza esterna.
-
-### RSSI sampling
-
-```python
-IW = "/usr/sbin/iw"
-def get_rssi():
-    r = subprocess.check_output(f"{IW} dev wlan0 link", shell=True, timeout=3)
-    return float(r.decode().split("signal:")[1].split("dBm")[0])
-```
-
-Risultato reale: **2.0 Hz, 0 errori**, segnale -47 a -36 dBm su wlan0.
-
-### Presence detection (adaptive)
-
-```python
-class AdaptivePresenceDetector:
-    def __init__(self, window_size=20, delta_threshold=1.5):
-        self.window = deque(maxlen=window_size)
-        self.delta_threshold = delta_threshold
-
-    def update(self, rssi):
-        self.window.append(rssi)
-        if len(self.window) < 10:
-            return False
-        recent = list(self.window)[-5:]
-        delta = abs(mean(recent) - mean(self.window))
-        return delta > self.delta_threshold
-```
-
-**Calibrazione**: `python3 calibrate_presence.py --mode quick`
-
----
-
-## Setup rapido
-
-```bash
-# Sul computer: carica sketch sullo STM32
-# 1. Apri feasibility_bridge.ino in Arduino IDE
-# 2. Board: Arduino UNO Q (STM32)
-# 3. Carica via USB-C
-
-# Sulla UNO Q (via SSH):
+# On the UNO Q via SSH
 cd ~/ArduinoApps/ArduinoWifiSensing
 git pull
 sudo apt-get install -y iw
-pip install msgpack
 
-# Test comunicazione STM32
-python3 bridge_client.py ping
-python3 bridge_client.py get_sensors
+# Quick calibration (30s baseline + 30s movement + analysis)
+python3 enhanced_presence.py --mode quick
 
-# Calibrazione presenza
-python3 calibrate_presence.py --mode quick
+# Live monitoring with calibrated thresholds
+python3 enhanced_presence.py --mode monitor
 
-# Test di fattibilita completo
-python3 feasibility_test.py
-```
-
----
-
-## File del progetto
-
-| File | Ruolo |
-|------|-------|
-| `feasibility_test.py` | Test automatico (RSSI, features, load, bridge, pipeline) |
-| `feasibility_bridge.ino` | **Sketch MCU con Arduino_RouterBridge (RPC)** |
-| `feasibility_test.ino` | Sketch MCU legacy con Serial (solo per debug USB→PC) |
-| `bridge_client.py` | Client Python per RPC via arduino-router Unix socket |
-| `calibrate_presence.py` | Calibrazione soglia presenza RSSI |
-| `arduino_cloud_integration.md` | Integrazione Arduino Cloud |
-| `shopping_list.md` | Componenti e budget |
-| `demo_24h_plan.md` | Piano demo 24h |
-| `TESTING.md` | Guida esecuzione test |
-
-```
-[Sensori MCU]              [WiFi RSSI (Linux)]       [Decision Engine]
-DHT22  -> temp/hum         scan wlan0                feature extraction
-MQ135  -> aria (VOC)       monitor RSSI over time    adaptive threshold
-LDR    -> luce                                        context window
-     \_________                         ___________/
-               |                       |
-               v                       v
-          [STM32 MCU]            [Python Core]
-    Arduino_RouterBridge         bridge_client.py
-    Bridge.provide("get_sensors") RPC via msgpack
-           |                            |
-           +------- arduino-router -----+
-                  Unix socket RPC
-                 /var/run/arduino-router.sock
-                       |
-                       v
-                [Decision Engine]
-              presence + context -> relay/LED
-```
-
-**Zero `/dev/tty*`**. La comunicazione STM32↔Linux avviene via **MessagePack RPC** attraverso il servizio `arduino-router` (Go), non via seriale tradizionale.
-
-Tutto gira **on-board**. Nessun cloud obbligatorio. Privacy garantita.
-
----
-
-## Board: Arduino UNO Q
-
-| Caratteristica | Dettaglio |
-|---------------|-----------|
-| **MPU** (Linux) | Qualcomm Dragonwing QRB2210 (quad-core 2.0 GHz, Debian) |
-| **MCU** (real-time) | STM32U585 (Arm Cortex-M33, 160 MHz, Zephyr RTOS) |
-| RAM Linux | 2 GB LPDDR4 |
-| RAM MCU | 786 KB SRAM |
-| Flash MCU | 2 MB |
-| WiFi | Qualcomm integrato (wlan0, 2.4 GHz) |
-| BLE | Bluetooth 5.0 LE |
-| GPIO | 14 digitali, 8 analogici (via STM32) |
-| Python | 3.13.5 |
-| **Comunicazione MPU↔MCU** | `arduino-router` (Unix socket `/var/run/arduino-router.sock`) |
-| UART bridge | `/dev/ttyHS1` a **115200 baud** (gestito dal router) |
-| Interfaccia | USB-C (programmazione + debug) |
-
----
-
-## Risultati test di fattibilita
-
-Eseguito sulla UNO Q reale (14/05/2026, 2 iterazioni). **5/7 test PASS** al secondo run.
-
-### Riepilogo
-
-| Test | 1° run | 2° run | Dettaglio |
-|------|--------|--------|-----------|
-| **RSSI Sampling** | ✅ PASS | ✅ PASS | 2.0 Hz, 0 errori su 40 campioni |
-| **Feature Extraction** | ✅ PASS | ✅ PASS | ~1.0 ms per estrazione (pure Python) |
-| **UART** | ❌ FAIL | ❌ FAIL | Sketch usa `Serial` — **serve `Arduino_RouterBridge`** |
-| **System Load** | ✅ PASS | ✅ PASS | CPU 0.2%, RAM 20% |
-| **Presence Detection** | ❌ FAIL | ✅ PASS | std varia: 4.66 (1°) / 1.71 (2°) |
-| **Combined Pipeline** | ✅ PASS | ✅ PASS | 59 loop, 2.0/s, 0 errori |
-
-### Scoperte chiave
-
-| Scoperta | Dettaglio |
-|----------|-----------|
-| **RSSI via `iw`** | Stabile a 2 Hz su wlan0. Usa `/usr/sbin/iw` |
-| **Niente `/proc/net/wireless`** | Driver Qualcomm non espone statistiche raw |
-| **Comunicazione MCU** | Non via `/dev/tty*` — usa **RPC via `arduino-router`** (Unix socket) |
-| **Router attivo** | `systemctl status arduino-router` — in esecuzione da boot |
-| **Porta STM32** | `/dev/ttyHS1` a 115200 baud (gestita dal router, non accessibile direttamente) |
-| **Socket** | `/var/run/arduino-router.sock` (rw-rw-rw-) |
-| **Protocollo** | MessagePack RPC, star topology |
-| **Baud rate corretto** | 115200 (il router usa questo, non 9600) |
-| **Carico sistema** | Irrisorio: CPU 0.2%, RAM 20% anche con sensing attivo |
-| **Presenza** | Rilevabile ma soglia dipende dall'ambiente (std 1.7-4.7) |
-
----
-
-## Comunicazione STM32 ↔ Linux
-
-Sulla UNO Q, il processore Linux (Qualcomm) e il microcontrollore (STM32) comunicano attraverso l'**Arduino Router**, un servizio Go che implementa un **MessagePack RPC Router** a topologia stellare.
-
-### Architettura di comunicazione
-
-```
-STM32 (sketch)                 arduino-router (Go)            Linux (Python)
-┌──────────────────┐    ┌─────────────────────────┐    ┌──────────────────┐
-│ Bridge.begin()   │    │ /usr/bin/arduino-router  │    │ bridge_client.py  │
-│ Bridge.provide() │◄──►│  --serial-port ttyHS1   │◄──►│ RouterRPC.call()  │
-│ Monitor.println()│    │  --serial-baudrate 115200│    │ msgpack encode    │
-└──────────────────┘    │  --unix-port .sock      │    └──────────────────┘
-                        └─────────────────────────┘
-                                  │
-                           Monitor TCP
-                          (Arduino IDE)
-```
-
-Il router e preinstallato e attivo di default sulla UNO Q:
-
-```
-● arduino-router.service - Arduino Router Service
-  Active: active (running) since boot
-  Main PID: 573 (arduino-router)
-  Memory: 10.4M (peak: 11.1M)
-```
-
-### MCU side (sketch Arduino)
-
-```cpp
-#include "Arduino_RouterBridge.h"
-
-Bridge.begin();                        // Connessione al router (via ttyHS1, 115200 baud)
-Bridge.provide("ping", ping);          // Espone funzione RPC
-Bridge.provide("get_sensors", get_sensors);
-
-Monitor.begin();                       // Testo output (alternativa a Serial)
-Monitor.println("MCU ready");
-```
-
-### Linux side (Python)
-
-```python
-from bridge_client import RouterRPC
-
-rpc = RouterRPC()
-result = rpc.call("ping")            # Chiama funzione sullo STM32
-sensors = rpc.call("get_sensors")    # "ts,temp,hum,air,light"
-```
-
-Oppure da terminale:
-
-```bash
-python3 bridge_client.py ping
-python3 bridge_client.py get_sensors
-python3 bridge_client.py discover   # Scopre metodi registrati
-```
-
----
-
-## Pipeline software
-
-### 1. RSSI sampling
-
-```python
-import subprocess, shutil
-
-IW = shutil.which("iw") or "/usr/sbin/iw"
-
-def get_rssi() -> float | None:
-    try:
-        r = subprocess.check_output(
-            f"{IW} dev wlan0 link", shell=True, timeout=3,
-            stderr=subprocess.DEVNULL).decode()
-        return float(r.split("signal:")[1].split("dBm")[0])
-    except Exception:
-        return None
-```
-
-Risultato reale sulla UNO Q: **2.0 Hz stabili, 0 errori**.
-
-### 2. Feature extraction
-
-```python
-from statistics import mean, stdev
-
-def extract_features(window: list[float]) -> dict:
-    return {"mean": mean(window), "std": stdev(window) if len(window)>=2 else 0,
-            "delta": max(window)-min(window), "var": stdev(window)**2 if len(window)>=2 else 0}
-```
-
-**1.0 ms** per estrazione in pure Python (numpy non installato).
-
-### 3. Presence detection (adattiva)
-
-Con segnale WiFi forte, lo std ambiente puo variare da 1.7 a 4.7 dBm. La soglia fissa non funziona.
-
-```python
-from collections import deque
-
-class AdaptivePresenceDetector:
-    def __init__(self, window_size: int = 20, delta_threshold: float = 1.5):
-        self.window = deque(maxlen=window_size)
-        self.delta_threshold = delta_threshold
-
-    def update(self, rssi: float) -> bool:
-        self.window.append(rssi)
-        if len(self.window) < 10:
-            return False
-        baseline = mean(list(self.window)[:-5]) if len(self.window) > 5 else mean(self.window)
-        recent = mean(list(self.window)[-5:])
-        return abs(recent - baseline) > self.delta_threshold
-```
-
-**Calibrazione**: usa `calibrate_presence.py` per trovare la soglia ottimale:
-
-```bash
-python3 calibrate_presence.py --mode quick   # baseline + movement + analisi
-python3 calibrate_presence.py --mode monitor # test real-time
-```
-
-### 4. Decision engine
-
-```python
-rpc = RouterRPC()
-detector = AdaptivePresenceDetector()
-absence_start = None
-
-while True:
-    rssi = get_rssi()
-    presence = detector.update(rssi)
-
-    if presence:
-        rpc.call("set_relay", 1)        # Accendi luce
-        absence_start = None
-    else:
-        if absence_start is None:
-            absence_start = time.time()
-        elif time.time() - absence_start > 300:  # 5 min
-            rpc.call("set_relay", 0)    # Spegni luce
-
-    sensors = rpc.call("get_sensors")    # Lettura periodica da MCU
-    # temp, hum, air, light = map(float, sensors.split(",")[1:])
-
-    time.sleep(0.5)
-```
-
----
-
-## File del progetto
-
-| File | Descrizione |
-|------|-------------|
-| `feasibility_test.py` | Test automatico (RSSI, features, load, pipeline) |
-| `feasibility_bridge.ino` | **Sketch MCU** con `Arduino_RouterBridge` (RPC, non Serial) |
-| `bridge_client.py` | Client Python per socket RPC (`/var/run/arduino-router.sock`) |
-| `calibrate_presence.py` | Calibrazione soglia presence detection |
-| `feasibility_test.ino` | Sketch MCU legacy (Serial, per USB direct to PC) |
-| `arduino_cloud_integration.md` | Guida integrazione Arduino Cloud |
-| `shopping_list.md` | Componenti con priorita |
-| `demo_24h_plan.md` | Piano dimostrazione 24h |
-| `TESTING.md` | Guida esecuzione test |
-
----
-
-## Setup rapido
-
-### 1. Hardware (collegamento sensori allo STM32)
-
-```schema
-DHT22 VCC -> 5V       MQ135 VCC -> 5V       LDR + 10kΩ partitore -> A1
-DHT22 GND -> GND      MQ135 GND -> GND      Relay VCC -> 5V
-DHT22 OUT -> D2       MQ135 OUT -> A0       Relay GND -> GND
-                                             Relay IN  -> D3
-LED+ -> D4 (con 220Ω) / LED- -> GND
-```
-
-### 2. Software
-
-```bash
-# Sulla UNO Q (via SSH)
-sudo apt-get install -y iw python3-serial python3-pip
-pip install msgpack
-
-# Pull ultimo codice
-cd ~/ArduinoApps/ArduinoWifiSensing
-git pull
-
-# Carica sketch MCU via Arduino IDE
-#   - Apri feasibility_bridge.ino
-#   - Board: Arduino UNO Q (STM32)
-#   - Carica via USB-C
-
-# Test RSSI sampling
-python3 feasibility_test.py --install-deps
-
-# Test comunicazione Bridge
-python3 bridge_client.py ping
-python3 bridge_client.py get_sensors
-python3 bridge_client.py discover
-
-# Calibrazione presenza
-python3 calibrate_presence.py --mode quick
-
-# Avvia decision engine
+# Full orchestrator (RSSI + sensor RPCs + relay/LED)
 python3 decision_engine.py
 ```
 
+For the STM32 side (sensors + relay): upload [feasibility_bridge/feasibility_bridge.ino](feasibility_bridge/feasibility_bridge.ino) via Arduino IDE (Board: "Arduino UNO Q (STM32)").
+
+### Known limit
+
+The Qualcomm WiFi driver on UNO Q reports RSSI that alternates ±10 dBm sample-to-sample (likely dual antenna / dual MAC queue artifact). The `enhanced_presence` detector compensates with EMA filtering and signal_avg fusion, but residual noise overlaps with human-motion signal. RSSI alone gives **coarse** presence detection with non-trivial false-positive rates. For sub-second, room-mapping, or biometric-grade sensing, use the CSI pipeline.
+
 ---
 
-## Comunicazione: perche non uso Serial
+## Pipeline 2 — CSI (UNO Q + ESP32)
 
-Sulla UNO Q, lo STM32 **non** espone una `/dev/tty*` classica verso il Linux. La comunicazione e gestita dal servizio `arduino-router` che:
+Detects presence and motion from per-subcarrier amplitude and phase of WiFi packets received by the ESP32. Far more sensitive than RSSI because it captures **multipath fingerprinting** — the way a person's body reshapes the radio environment is visible per subcarrier, not just as a single dBm number.
 
-1. Ascolta su `/var/run/arduino-router.sock` (Unix socket, world-writable)
-2. Usa **MessagePack RPC** per invocare funzioni tra i due processori
-3. Si connette allo STM32 via `/dev/ttyHS1` a **115200 baud** (UART interna Qualcomm↔STM32)
-4. Supporta anche Monitor TCP (usato dall'Arduino IDE Serial Monitor)
+### Credits
 
-Lo sketch `feasibility_test.ino` originale usa `Serial.begin(9600)` — questo **non funziona** sulla UNO Q per due motivi:
-- Il baud rate del router e **115200**, non 9600
-- `Serial.print` non va al router — va al **USB CDC ACM** (solo se collegato a PC via USB)
+The ESP32 CSI capture firmware is adapted from the **[ESP32-CSI-Tool](https://stevenmhernandez.github.io/ESP32-CSI-Tool/)** by Steven M. Hernandez, which exposes the ESP-IDF `esp_wifi_set_csi_rx_cb()` API in a usable form. We adapted the output format (`CSI:<seq>:<rssi>:<noise>:<rate>:<bw>:<sub_count>:<r0,i0,...>`) so the UNO Q's STM32 bridge can stream it via the `arduino-router` to the Linux side. The Python parser also accepts the original `CSI_DATA,...` format for compatibility with Hernandez's analysis scripts.
 
-La soluzione e `feasibility_bridge.ino`, che usa `Arduino_RouterBridge`:
-- `Bridge.provide("name", func)` espone funzioni RPC
-- `Monitor.println()` manda testo al router (alternativa a `Serial`)
-- `Bridge.begin()` si connette automaticamente al router
+### Architecture
+
+```
+   ESP32                    UNO Q STM32                  UNO Q Linux
+┌─────────────┐    UART    ┌──────────────┐    RPC    ┌──────────────┐
+│ CSI capture │──921600───▶│ csi_bridge   │──msgpack─▶│ csi_processor│
+│ (Hernandez) │  D0/D1     │ buffer       │  router   │ detect/log   │
+└─────────────┘            └──────────────┘           └──────────────┘
+```
+
+The ESP32 connects to a 2.4 GHz AP (your home WiFi), captures CSI from every received packet (beacons + responses), and streams CSV frames on its UART. The STM32 bridges those frames into the Linux side as RPC responses. Python parses, runs the detector, logs.
+
+### Files
+
+| File | What it does |
+|---|---|
+| [csi_processor.py](csi_processor.py) | Main CSI pipeline on Linux. Modes: `--ping` / `--monitor` / `--calibrate` / `--benchmark` / `--analyze`. Includes `parse_csi_line` and `CSIDetector` classes |
+| [csi_mac.py](csi_mac.py) | Standalone: read CSI directly from ESP32's USB on a Mac/PC. Bypasses UNO Q entirely. Useful for testing CSI without the UART bridge |
+| [esp32_csi_firmware/](esp32_csi_firmware/) | ESP32 sketch — captures CSI and streams CSV |
+| [esp32_csi_bridge/](esp32_csi_bridge/) | STM32 sketch — buffers ESP32 frames and exposes `csi_ping`, `csi_count`, `csi_read_all`, `csi_clear` RPCs |
+| [test_esp32_uart/](test_esp32_uart/) | STM32 sketch to verify the UART link to ESP32 |
+
+### Wiring (ESP32 → UNO Q)
+
+```
+ESP32 GND  →  UNO Q GND          (mandatory)
+ESP32 5V   →  UNO Q 5V
+ESP32 TX   →  UNO Q D0           (STM32 Serial1 RX)
+ESP32 RX   →  UNO Q D1           (STM32 Serial1 TX)
+Baud rate: 921600 (or 115200 if you flashed the diagnostic build)
+```
+
+### Quick start
+
+**On a host computer (Mac/PC):**
+```bash
+cd esp32_csi_firmware
+cp secrets.h.example secrets.h    # then edit SSID/PASS, AP must be 2.4 GHz!
+```
+
+Open `esp32_csi_firmware.ino` in Arduino IDE. Board: **ESP32 Dev Module**. Upload Speed: **115200** (more reliable than 921600 with cheap USB-Serial chips). Upload to ESP32 via USB. Watch the Serial Monitor at the firmware's baud rate (currently 115200 in the diagnostic build) for `ESP32_CSI_READY` → `WiFi:connecting...` → `WiFi:OK,<ip>` → `CSI:enabled`.
+
+**On the UNO Q (full pipeline through the STM32 bridge):**
+```bash
+# 1. Upload esp32_csi_bridge.ino to the STM32 via Arduino IDE
+#    (Board: "Arduino UNO Q (STM32)")
+# 2. Wire ESP32 to D0/D1 as above
+# 3. Power-cycle / reset both
+
+cd ~/ArduinoApps/ArduinoWifiSensing
+git pull
+pip install msgpack
+python3 csi_processor.py --ping       # → ESP32: pong:OK
+python3 csi_processor.py --monitor    # live presence detection
+```
+
+**On a Mac (CSI without UNO Q, ESP32 only):**
+```bash
+pip install pyserial
+python3 csi_mac.py --monitor          # autodetects /dev/cu.usbserial-*
+python3 csi_mac.py --capture --seconds 60 --label test1
+python3 csi_mac.py --calibrate --seconds 30
+```
+
+### Why CSI matters
+
+RSSI gives one number per packet. CSI gives 64–128 (one per subcarrier). When a person enters the room, RSSI may barely budge, but the per-subcarrier multipath structure changes dramatically — different subcarriers experience different constructive/destructive interference from the new body. The variance across subcarriers, the temporal evolution of phase, and cross-subcarrier covariance are all rich features that academic literature has exploited for breathing-rate estimation, gait recognition, fall detection, and pose estimation. This repo provides the substrate.
+
+---
+
+## Repository layout
+
+```
+.
+├── README.md                           # this file
+├── docs/
+│   ├── VISION.md                       # full If-I-Wi-Fy vision (use cases, market)
+│   ├── TESTING.md                      # how to run tests
+│   ├── arduino_cloud_integration.md    # optional Arduino Cloud sync
+│   ├── demo_24h_plan.md                # demo playbook
+│   └── shopping_list.md                # hardware BOM
+│
+├── enhanced_presence.py                # RSSI pipeline (main)
+├── calibrate_presence.py
+├── monitor_presence.py
+├── decision_engine.py
+├── feasibility_test.py
+├── bridge_client.py                    # arduino-router RPC client (CLI)
+│
+├── csi_processor.py                    # CSI pipeline (main)
+├── csi_mac.py                          # CSI without UNO Q (Mac/PC standalone)
+│
+├── feasibility_bridge/                 # STM32 sketch: sensors + relay (RSSI pipeline)
+├── feasibility_test/                   # STM32 sketch: legacy USB-only
+├── esp32_csi_firmware/                 # ESP32 sketch: CSI capture
+├── esp32_csi_bridge/                   # STM32 sketch: ESP32→UNO Q bridge
+├── test_esp32_uart/                    # STM32 sketch: UART link tester
+│
+├── test_csi_processor.py               # Python tests
+├── test_detectors.py
+└── csi_logs/                           # CSI capture output (gitignored)
+```
+
+---
+
+## Setup
+
+### Common dependencies (UNO Q Linux side)
+
+```bash
+sudo apt-get install -y iw python3-pip
+pip install msgpack pyserial
+```
+
+`iw` is needed by the RSSI pipeline. `msgpack` is needed by anything that talks to `arduino-router` (the bridge). `pyserial` is needed by `csi_mac.py` (host-side standalone CSI).
+
+### Mac / PC (CSI standalone, no UNO Q)
+
+```bash
+pip install pyserial
+# msgpack NOT required — csi_processor.py imports it lazily only when
+# RouterClient.connect() is called
+```
+
+### STM32 sketches
+
+Use Arduino IDE with the **Arduino UNO Q (STM32)** core selected. You must install the **Arduino_RouterBridge** library via Library Manager (the core ships a stub that errors out otherwise).
+
+Only one of `feasibility_bridge` or `esp32_csi_bridge` can run on the STM32 at a time — they expose different RPC method sets. Choose based on which pipeline you're testing.
+
+### ESP32 sketch
+
+Arduino IDE with the **esp32** core (Espressif) and Board: **ESP32 Dev Module**. The CSI API uses `esp_wifi_set_csi()` from ESP-IDF, exposed by the Arduino core. No external library needed.
+
+Set Upload Speed to **115200** (or **460800** max) — 921600 fails on many USB-Serial chips and cables.
+
+---
+
+## Troubleshooting
+
+**Upload to ESP32 fails with "chip stopped responding"**: lower Tools > Upload Speed to 115200, use a short data-quality USB cable, plug directly into the host (no hub), optionally hold BOOT during the whole upload.
+
+**Serial Monitor shows only garbage**: Arduino IDE 2.x has a known bug where the baud-rate dropdown doesn't always take effect. Close and reopen Serial Monitor, or use `screen /dev/cu.usbserial-XXX 115200` from a terminal.
+
+**ESP32 boots then reset-loops**: USB hub current-limited. Plug ESP32 directly into the host. The firmware has brownout detector disabled and TX power reduced to mitigate; if it still loops, the supply path is too weak.
+
+**`csi_processor.py --ping` returns `ESP32_NOT_CONNECTED`**: the STM32 bridge can't reach the ESP32 via UART. Verify wiring (TX/RX not swapped, GND shared), baud match (both at 921600 in production firmware), and that the ESP32 is actually running its firmware (Serial Monitor shows boot messages).
+
+**RSSI presence detection gives constant false positives**: the Qualcomm driver alternates RSSI between two values. This is known. Use `signal_avg` (which `enhanced_presence` does) and a higher gradient threshold (`--grad-threshold 3.0`).
+
+For more, see [docs/TESTING.md](docs/TESTING.md).
+
+---
+
+## Privacy by construction
+
+Everything runs on the edge. No frames are sent to the cloud. No biometric features are extracted. The signals we exploit (RSSI, CSI amplitude/phase per subcarrier) cannot be reversed into identifying information about the persons present. This is privacy-preserving **as a property of the physics**, not as a promise from a manufacturer.
+
+See [docs/VISION.md](docs/VISION.md) for the broader argument.
+
+---
+
+## License
+
+To be decided. The Steven Hernandez ESP32-CSI-Tool that the ESP32 firmware adapts is under its own license — consult the upstream repository for terms.

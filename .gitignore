@@ -1,5 +1,24 @@
+# Python
 __pycache__/
 *.pyc
-esp32_csi_collector/secrets.h
+*.pyo
+.pytest_cache/
+
+# macOS / editors
+.DS_Store
+*.swp
+
+# Arduino build artifacts
+**/build/
+*.elf
+*.map
+
+# Secrets
+**/secrets.h
+!**/secrets.h.example
+
+# Runtime data
 csi_logs/
 *.csi.csv
+calib_*.json
+enh_calib_*.json

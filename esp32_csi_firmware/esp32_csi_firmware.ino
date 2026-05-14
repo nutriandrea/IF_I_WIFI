@@ -27,6 +27,8 @@
 
 #include <WiFi.h>
 #include "esp_wifi.h"
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
 
 // ============================================================
 // CONFIG — modifica secrets.h con le tue credenziali WiFi
@@ -36,7 +38,7 @@
 // ============================================================
 // Config tecnica
 // ============================================================
-#define SERIAL_BAUD      921600
+#define SERIAL_BAUD      115200   // 115200 e' il piu' affidabile con CH340 + cavi non perfetti
 #define CSI_QUEUE_SLOTS  4
 #define CSI_MAX_SUBCARRIERS 128  // sufficiente per HT40
 
@@ -176,12 +178,24 @@ static unsigned long last_wifi_check = 0;
 // Setup & Loop
 // ============================================================
 void setup() {
+    // ----------------------------------------------------------
+    // Hardening per alimentazione marginale (USB hub, cavo lungo, ecc.)
+    //  - Disabilita il brownout detector hardware: evita reset spuri
+    //    sui picchi di corrente del WiFi quando il VCC scende sotto ~2.7V.
+    //  - Ritardo di stabilizzazione prima di toccare il radio.
+    //  - WiFi TX power ridotta da 19.5dBm (default) a 8.5dBm: ~3-4x
+    //    meno corrente di picco in trasmissione, range comunque ampio.
+    // Se l'ESP32 risulta stabile con alimentazione diretta dal Mac,
+    // queste linee non hanno effetti collaterali significativi.
+    // ----------------------------------------------------------
+    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
 
     Serial.begin(SERIAL_BAUD);
 
-    // Segnale di boot: 3 lampeggi
+    // Segnale di boot: 3 lampeggi (anche utile come "rampa" lenta verso WiFi)
     for (int i = 0; i < 3; i++) {
         digitalWrite(LED_PIN, HIGH);
         delay(100);
@@ -191,14 +205,35 @@ void setup() {
 
     Serial.println("ESP32_CSI_READY");
 
+    // Stabilizzazione alimentazione prima del WiFi
+    delay(500);
+
     // Avvia WiFi NON bloccante — loop() risponde subito ai comandi
     Serial.print("WiFi:connecting...");
     WiFi.mode(WIFI_STA);
+    // Riduce la potenza TX per stare nei limiti USB (8.5dBm ≈ 7mW).
+    // Range tipico in casa: ancora sufficiente per stare connessi all'AP.
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);
     WiFi.begin(WIFI_SSID, WIFI_PASS);
 }
 
 void loop() {
     handle_commands();          // Risponde a "ping" IMMEDIATAMENTE
+
+    // Heartbeat di vita (1 Hz, indipendente dal WiFi). Se vedi questi
+    // tick il chip e' vivo. Se NON li vedi, il chip e' in reset loop
+    // o l'upload non e' andato a buon fine.
+    static unsigned long last_heartbeat = 0;
+    unsigned long now_hb = millis();
+    if (now_hb - last_heartbeat >= 1000) {
+        last_heartbeat = now_hb;
+        Serial.print("HB:");
+        Serial.print(now_hb / 1000);
+        Serial.print("s wifi=");
+        Serial.print(WiFi.status());
+        Serial.print(" heap=");
+        Serial.println(ESP.getFreeHeap());
+    }
 
     // WiFi + CSI init non bloccante (ogni 500ms)
     if (!csi_initialized) {

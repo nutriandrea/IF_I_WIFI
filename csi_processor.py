@@ -25,7 +25,9 @@ Dipendenze:
   scipy    (apt: python3-scipy,   per salvare .mat)
 """
 
-import socket, msgpack, time, json, sys, os, re, argparse
+import socket, time, json, sys, os, re, argparse
+# msgpack: import lazy, serve solo a RouterClient (UNO Q bridge RPC).
+# Su Mac/host senza UNO Q importare csi_processor non deve richiedere msgpack.
 from datetime import datetime
 from collections import deque
 from statistics import mean, stdev
@@ -48,6 +50,9 @@ class RouterClient:
         self.msg_counter = 0
 
     def connect(self):
+        # Import msgpack on demand: chi non usa il bridge (es. csi_mac.py) non deve installarlo.
+        global msgpack
+        import msgpack  # noqa: F401
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sock.settimeout(RPC_TIMEOUT)
         self.sock.connect(self.socket_path)
