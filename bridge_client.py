@@ -32,6 +32,7 @@ import select
 import sys
 import time
 import argparse
+import json
 from datetime import datetime
 
 SOCKET_PATH = "/var/run/arduino-router.sock"
@@ -384,6 +385,10 @@ def main():
                         help=f"Timeout secondi (default: {TIMEOUT_S})")
     parser.add_argument("--debug", action="store_true",
                         help="Debug: stampa bytes raw e decodifica")
+    parser.add_argument("--call", type=str, metavar="METHOD",
+                        help="Chiama metodo RPC arbitrario (es. $/version, $/reset)")
+    parser.add_argument("--call-args", type=str, metavar="ARGS",
+                        help="Argomenti JSON per --call (es. [\"ping\"] per $/register)")
     args = parser.parse_args()
 
     global DEBUG
@@ -489,6 +494,26 @@ def main():
                 if result is True or result == "true":
                     ok += 1
                 else:
+                    errors += 1
+            except Exception:
+                errors += 1
+        elapsed = time.time() - t0
+        rate = ok / elapsed if elapsed > 0 else 0
+
+    # --- Raw RPC call ---
+    elif args.call:
+        method = args.call
+        params = []
+        if args.call_args:
+            params = json.loads(args.call_args)
+        print(f"\n  --- RPC call: {method}{params} ---")
+        try:
+            result = client.call(method, *params, timeout=args.timeout)
+            print(f"  Response: {result!r}")
+        except Exception as e:
+            print(f"  Error: {e}")
+
+    else:
                     errors += 1
             except Exception:
                 errors += 1
