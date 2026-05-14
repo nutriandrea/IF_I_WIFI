@@ -36,6 +36,7 @@ from datetime import datetime
 SOCKET_PATH = "/var/run/arduino-router.sock"
 TIMEOUT_S = 5
 MONITOR_PORT = 51023  # default arduino monitor port, may vary
+DEBUG = False
 
 
 # ============================================================
@@ -173,9 +174,14 @@ class RouterClient:
 
     def call(self, method: str, *params, timeout: int | None = None) -> any:
         """Esegue una chiamata RPC al router."""
+        global DEBUG
         msgid = self._next_id()
         request = [0, msgid, method, list(params)]
         packed = _msgpack_encode(request)
+
+        if DEBUG:
+            print(f"    [DEBUG] Request: {request}")
+            print(f"    [DEBUG] Packed ({len(packed)} bytes): {packed.hex()}")
 
         t = timeout or self.timeout
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
@@ -184,9 +190,25 @@ class RouterClient:
             client.sendall(packed)
             response_data = client.recv(65536)
 
+        if DEBUG:
+            print(f"    [DEBUG] Raw response ({len(response_data)} bytes): {response_data.hex()}")
+
         response, _ = _msgpack_decode(response_data)
-        if not isinstance(response, list) or len(response) < 4:
-            raise RuntimeError(f"Invalid response format: {response}")
+
+        if DEBUG:
+            print(f"    [DEBUG] Decoded: {response}")
+
+        if not isinstance(response, list):
+            raise RuntimeError(f"Response is not a list: {type(response).__name__} = {response}")
+        if len(response) < 4:
+            # Could be [result] or [result, error] format
+            if len(response) == 1:
+                return response[0]
+            if len(response) == 2:
+                if response[1] is not None:
+                    raise RuntimeError(f"RPC error: {response[1]}")
+                return response[0]
+            raise RuntimeError(f"Response list too short: {len(response)} elements = {response}")
         if response[0] != 1:
             raise RuntimeError(f"Unexpected response type: {response[0]}")
         if response[2] is not None:
@@ -316,12 +338,20 @@ def main():
                         help="Lista metodi registrati sul router")
     parser.add_argument("--timeout", type=int, default=TIMEOUT_S,
                         help=f"Timeout secondi (default: {TIMEOUT_S})")
+    parser.add_argument("--debug", action="store_true",
+                        help="Debug: stampa bytes raw e decodifica")
     args = parser.parse_args()
+
+    global DEBUG
+    if args.debug:
+        DEBUG = True
 
     print(f"\n{'='*60}")
     print(f"  Bridge Client — Arduino UNO Q")
     print(f"  Socket: {SOCKET_PATH}")
     print(f"  Timeout: {args.timeout}s")
+    if DEBUG:
+        print(f"  DEBUG: ON")
     print(f"{'='*60}")
 
     # Check socket exists
