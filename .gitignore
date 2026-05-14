@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+esp32_csi_collector/secrets.h
+csi_logs/
+*.csi.csv
