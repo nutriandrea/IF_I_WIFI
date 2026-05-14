@@ -15,7 +15,7 @@ Flags:
   --install-deps   Prova ad installare iw e pyserial automaticamente
 """
 
-import subprocess, time, json, sys, os, re, shutil, argparse
+import subprocess, time, json, sys, os, re, shutil, argparse, socket, struct
 from datetime import datetime
 from collections import deque
 from statistics import mean, stdev
