@@ -169,6 +169,9 @@ static void output_frames() {
     csi_tail = (csi_tail + 1) % CSI_QUEUE_SLOTS;
 }
 
+static bool csi_initialized = false;
+static unsigned long last_wifi_check = 0;
+
 // ============================================================
 // Setup & Loop
 // ============================================================
@@ -188,36 +191,43 @@ void setup() {
 
     Serial.println("ESP32_CSI_READY");
 
-    // Connetti WiFi (obbligatorio per CSI)
+    // Avvia WiFi NON bloccante — loop() risponde subito ai comandi
     Serial.print("WiFi:connecting...");
+    WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASS);
-
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 100) {
-        delay(500);
-        Serial.print(".");
-        attempts++;
-    }
-
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.println();
-        Serial.print("WiFi:OK,");
-        Serial.println(WiFi.localIP());
-        digitalWrite(LED_PIN, HIGH);
-
-        // Attiva CSI
-        if (setup_csi()) {
-            Serial.println("CSI:enabled");
-        } else {
-            Serial.println("CSI:FAILED");
-        }
-    } else {
-        Serial.println("\nWiFi:FAILED");
-    }
 }
 
 void loop() {
-    handle_commands();
-    output_frames();
+    handle_commands();          // Risponde a "ping" IMMEDIATAMENTE
+
+    // WiFi + CSI init non bloccante (ogni 500ms)
+    if (!csi_initialized) {
+        unsigned long now = millis();
+        if (now - last_wifi_check >= 500) {
+            last_wifi_check = now;
+
+            if (WiFi.status() == WL_CONNECTED) {
+                csi_initialized = true;
+                Serial.println();
+                Serial.print("WiFi:OK,");
+                Serial.println(WiFi.localIP());
+                digitalWrite(LED_PIN, HIGH);
+
+                if (setup_csi()) {
+                    Serial.println("CSI:enabled");
+                } else {
+                    Serial.println("CSI:FAILED");
+                }
+            } else {
+                Serial.print(".");
+            }
+        }
+    }
+
+    // Output CSI solo quando inizializzato
+    if (csi_initialized) {
+        output_frames();
+    }
+
     delay(1);
 }

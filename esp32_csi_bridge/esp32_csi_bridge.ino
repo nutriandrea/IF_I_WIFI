@@ -118,13 +118,23 @@ static int esp32_read_line(char* buf, int max_len, int timeout_ms) {
     return idx;
 }
 
+#define ESP32_RETRY_MS 5000  // ogni 5s riprova connessione se fallita
+
 // Polling ESP32: legge linee CSI e le bufferizza
 static void esp32_poll() {
-    if (!esp32_ok) return;
-
     unsigned long now = millis();
     if (now - last_esp32_poll < ESP32_POLL_MS) return;
     last_esp32_poll = now;
+
+    // Se ESP32 non ancora connesso, riprova periodicamente
+    if (!esp32_ok) {
+        static unsigned long last_retry = 0;
+        if (now - last_retry >= ESP32_RETRY_MS) {
+            last_retry = now;
+            esp32_try_ping(300);
+        }
+        return;
+    }
 
     while (ESP32_SERIAL.available() && csi_buffer_count < CSI_BUF_MAX) {
         char line[CSI_LINE_MAX];
@@ -143,15 +153,43 @@ static void esp32_poll() {
 // RPC functions exposed to Linux side
 // ============================================================
 
+static bool esp32_try_ping(int timeout_ms) {
+    esp32_flush();
+    esp32_send_cmd("ping");
+    // Legge fino a timeout: ignora frame CSI, cerca "pong"
+    unsigned long deadline = millis() + timeout_ms;
+    while (millis() < deadline) {
+        char resp[64];
+        int len = esp32_read_line(resp, sizeof(resp), 20);
+        if (len > 0) {
+            if (strstr(resp, "pong") != NULL) {
+                esp32_ok = true;
+                return true;
+            }
+            // CSI frame o altro output — continua a leggere
+        } else {
+            // Nessun dato — aspetta un po'
+            delay(10);
+        }
+    }
+    esp32_ok = false;
+    return false;
+}
+
 String csi_ping() {
-    if (!esp32_ok) return String("ESP32_NOT_CONNECTED");
+    if (!esp32_ok) {
+        // Ritenta: ESP32 potrebbe ancora stare bootando (WiFi.connect bloccante ~50s)
+        if (esp32_try_ping(500)) {
+            return String("pong:OK");
+        }
+        return String("ESP32_NOT_CONNECTED");
+    }
 
     esp32_flush();
     esp32_send_cmd("ping");
     char resp[64];
     int len = esp32_read_line(resp, sizeof(resp), 500);
     if (len > 0) {
-        // Se arriva "pong:OK" va bene, altrimenti riporta risposta
         return String("pong:") + String(resp);
     }
     return String("ESP32_NO_RESPONSE");
@@ -211,15 +249,8 @@ void setup() {
     delay(200);
     esp32_flush();
 
-    // Prova a parlare con ESP32
-    esp32_send_cmd("ping");
-    char resp[64];
-    int len = esp32_read_line(resp, sizeof(resp), 600);
-    if (len > 0 && strstr(resp, "pong") != NULL) {
-        esp32_ok = true;
-    } else {
-        esp32_ok = false;
-    }
+    // Prova a parlare con ESP32 (potrebbe essere ancora in boot: non grave)
+    esp32_ok = esp32_try_ping(600);
 
     // Inizializza bridge
     int state = try_bridge_init();
