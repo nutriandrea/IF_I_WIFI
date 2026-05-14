@@ -1,14 +1,16 @@
 /*
  * Feasibility Test — Bridge (MCU side, UNO Q native)
  *
- * Usa Arduino_RouterBridge (RPC) invece di Serial.begin/println.
- * L'arduino-router fa da ponte verso il Qualcomm Linux via /dev/ttyHS1.
+ * Usa Arduino_RouterBridge (RPC) su LPUART1 a 115200 baud.
+ * L'arduino-router fa da ponte verso il Qualcomm Linux.
+ *
+ * Basato su simple_bridge.ino (libreria ufficiale Arduino_RouterBridge).
  *
  * RPC funzioni esposte:
  *   ping()           -> true
  *   get_sensors()    -> "ts,temp,hum,air,light"
- *   set_relay(int)   -> bool
- *   set_led(int)     -> bool
+ *   set_relay(bool)  -> bool
+ *   set_led(bool)    -> bool
  *
  * Pinout:
  *   D2  -> DHT22 OUT
@@ -16,30 +18,37 @@
  *   A1  -> LDR OUT  (con partitore 10kΩ)
  *   D3  -> Relay IN
  *   D4  -> LED segnalazione
+ *   LED_BUILTIN -> heartbeat / error blink
  */
 
-#include "Arduino_RouterBridge.h"
+#include <Arduino_RouterBridge.h>
+#include <DHT.h>
 
-#define DHTPIN  2
-#define DHTTYPE DHT22
+#define DHTPIN   2
+#define DHTTYPE  DHT22
 #define MQ135PIN A0
-#define LDRPIN  A1
+#define LDRPIN   A1
 #define RELAYPIN 3
 #define LEDPIN   4
 
 DHT dht(DHTPIN, DHTTYPE);
 
-unsigned long last_print = 0;
-const unsigned long INTERVAL_MS = 2000;
+// LED blink helper: n lampeggi brevi
+static void blink_n(int n, int ms = 80) {
+    for (int i = 0; i < n; i++) {
+        digitalWrite(LED_BUILTIN, HIGH);
+        delay(ms);
+        digitalWrite(LED_BUILTIN, LOW);
+        if (i < n - 1) delay(ms);
+    }
+}
 
 // ============================================================
 // RPC functions exposed to Linux side
 // ============================================================
 
 bool ping() {
-    digitalWrite(LED_BUILTIN, HIGH);
-    delay(50);
-    digitalWrite(LED_BUILTIN, LOW);
+    blink_n(1, 30);
     return true;
 }
 
@@ -58,14 +67,14 @@ String get_sensors() {
            String(light);
 }
 
-bool set_relay(int state) {
-    digitalWrite(RELAYPIN, state == 1 ? HIGH : LOW);
-    return state == 1;
+bool set_relay(bool state) {
+    digitalWrite(RELAYPIN, state ? HIGH : LOW);
+    return state;
 }
 
-bool set_led(int state) {
-    digitalWrite(LEDPIN, state == 1 ? HIGH : LOW);
-    return state == 1;
+bool set_led(bool state) {
+    digitalWrite(LEDPIN, state ? HIGH : LOW);
+    return state;
 }
 
 // ============================================================
@@ -81,25 +90,31 @@ void setup() {
 
     dht.begin();
 
-    // Connessione all'arduino-router via /dev/ttyHS1 a 115200 baud
-    Bridge.begin();
+    // Inizializza bridge RPC su Serial1 (LPUART1, 115200 baud)
+    if (!Bridge.begin()) {
+        // Errore critico: bridge non inizializzato
+        while (true) {
+            blink_n(5, 100);  // 5 lampeggi rapidi = errore bridge
+            delay(1000);
+        }
+    }
 
-    // Esponi funzioni RPC
-    Bridge.provide("ping", ping);
-    Bridge.provide("get_sensors", get_sensors);
-    Bridge.provide("set_relay", set_relay);
-    Bridge.provide("set_led", set_led);
+    // Registra funzioni RPC — verifica ogni return value
+    bool ok = true;
+    ok &= Bridge.provide("ping", ping);
+    ok &= Bridge.provide_safe("get_sensors", get_sensors);
+    ok &= Bridge.provide("set_relay", set_relay);
+    ok &= Bridge.provide("set_led", set_led);
 
-    // Log sul Monitor (alternativa a Serial per testo)
+    // Inizializza Monitor (stream TCP per debug)
     Monitor.begin();
-    Monitor.println("BRIDGE: MCU ready — ping, get_sensors, set_relay, set_led");
 
-    // Blink 3x conferma
-    for (int i = 0; i < 3; i++) {
-        digitalWrite(LED_BUILTIN, HIGH);
-        delay(100);
-        digitalWrite(LED_BUILTIN, LOW);
-        delay(100);
+    if (ok) {
+        Monitor.println("BRIDGE: all methods registered OK");
+        blink_n(2, 150);  // 2 lampeggi = tutto OK
+    } else {
+        Monitor.println("BRIDGE: some methods FAILED to register");
+        blink_n(4, 150);  // 4 lampeggi = registration error
     }
 
     delay(500);
@@ -109,9 +124,11 @@ void setup() {
 // Loop
 // ============================================================
 void loop() {
+    // Stream periodico dati sensori sul Monitor (2 Hz)
+    static unsigned long last_print = 0;
     unsigned long now = millis();
 
-    if (now - last_print >= INTERVAL_MS) {
+    if (now - last_print >= 2000) {
         last_print = now;
 
         float t = dht.readTemperature();
@@ -121,7 +138,6 @@ void loop() {
         int light = analogRead(LDRPIN);
         unsigned long ts = now / 1000;
 
-        // CSV periodico sul Monitor (visibile da router)
         Monitor.print(ts);
         Monitor.print(",");
         Monitor.print(t);
@@ -134,7 +150,7 @@ void loop() {
 
         // LED heartbeat
         digitalWrite(LED_BUILTIN, HIGH);
-        delay(50);
+        delay(30);
         digitalWrite(LED_BUILTIN, LOW);
     }
 }
