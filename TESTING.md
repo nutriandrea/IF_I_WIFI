@@ -86,3 +86,12 @@ for i in range(12):
     test_rssi_sampling()
 "
 ```
+
+### Calibrazione presence detection
+```bash
+# Calibrazione rapida (5 minuti totali)
+python3 calibrate_presence.py --mode quick
+
+# Monitoraggio real-time
+python3 calibrate_presence.py --mode monitor
+```
