@@ -269,7 +269,10 @@ def analyze(baseline: list[dict], movement: list[dict]):
             if score > best_delta_score:
                 best_delta_score = score
                 best_delta_th = th
-        if abs(th - best_delta_th) < 0.5 or (fp_rate <= 0.3 and tp_rate >= 0.3):
+        show = (fp_rate <= 0.3 and tp_rate >= 0.3)
+        if best_delta_th is not None and abs(th - best_delta_th) < 0.5:
+            show = True
+        if show:
             verdict = "OK" if fp_rate <= 0.2 and tp_rate >= 0.5 else \
                       ("FALSI POS" if fp_rate > 0.3 else "POCO")
             print(f"  {th:>8.2f} {fp_rate:>8.0%} {tp_rate:>8.0%} {verdict:>12}")
