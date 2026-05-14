@@ -188,10 +188,24 @@ class RouterClient:
             client.settimeout(t)
             client.connect(self.socket_path)
             client.sendall(packed)
-            response_data = client.recv(65536)
+            # Leggi in loop — il router può mandare dati in piu chunk
+            response_data = b""
+            while True:
+                try:
+                    chunk = client.recv(65536)
+                    if not chunk:
+                        break
+                    response_data += chunk
+                    if DEBUG:
+                        print(f"    [DEBUG] Chunk ({len(chunk)} bytes): {chunk.hex()}")
+                    # Se abbiamo abbastanza bytes per un msgpack completo, esci
+                    if len(chunk) < 65536:
+                        break
+                except socket.timeout:
+                    break
 
         if DEBUG:
-            print(f"    [DEBUG] Raw response ({len(response_data)} bytes): {response_data.hex()}")
+            print(f"    [DEBUG] Total response ({len(response_data)} bytes): {response_data.hex()}")
 
         response, _ = _msgpack_decode(response_data)
 
