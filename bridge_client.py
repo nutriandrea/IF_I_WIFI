@@ -27,7 +27,7 @@ Usage:
 """
 
 import socket
-import msgpack
+import struct
 import sys
 import time
 import argparse
@@ -39,10 +39,128 @@ MONITOR_PORT = 51023  # default arduino monitor port, may vary
 
 
 # ============================================================
-# MessagePack RPC Client
+# MessagePack encode/decode built-in (zero dipendenze)
+# ============================================================
+def _msgpack_encode(obj):
+    """Codifica un oggetto Python in MessagePack binario."""
+    if obj is None:
+        return b'\xc0'
+    if isinstance(obj, bool):
+        return b'\xc3' if obj else b'\xc2'
+    if isinstance(obj, int):
+        if 0 <= obj <= 0x7f:
+            return bytes([obj])
+        if -32 <= obj < 0:
+            return bytes([obj & 0xff])
+        if 0x80 <= obj <= 0xff:
+            return b'\xcc' + bytes([obj])
+        if 0x100 <= obj <= 0xffff:
+            return b'\xcd' + struct.pack('>H', obj)
+        return b'\xce' + struct.pack('>I', obj)
+    if isinstance(obj, float):
+        return b'\xcb' + struct.pack('>d', obj)
+    if isinstance(obj, str):
+        data = obj.encode()
+        n = len(data)
+        if n <= 0x1f:
+            return bytes([0xa0 | n]) + data
+        if n <= 0xff:
+            return b'\xd9' + bytes([n]) + data
+        return b'\xda' + struct.pack('>H', n) + data
+    if isinstance(obj, (list, tuple)):
+        n = len(obj)
+        if n <= 0x0f:
+            buf = bytes([0x90 | n])
+        elif n <= 0xffff:
+            buf = b'\xdc' + struct.pack('>H', n)
+        else:
+            buf = b'\xdd' + struct.pack('>I', n)
+        for item in obj:
+            buf += _msgpack_encode(item)
+        return buf
+    if isinstance(obj, bytes):
+        n = len(obj)
+        if n <= 0x1f:
+            return bytes([0xc4 | (n >> 8 if n > 0x1f else 0)]) + (bytes([n]) if n <= 0x1f else b'') + obj
+        if n <= 0xff:
+            return b'\xc4' + bytes([n]) + obj
+        return b'\xc5' + struct.pack('>H', n) + obj
+    raise ValueError(f"Cannot encode {type(obj)}")
+
+
+def _msgpack_decode(data, pos=0):
+    """Decodifica MessagePack binario in oggetto Python."""
+    b = data[pos]
+    pos += 1
+    if b <= 0x7f:
+        return b, pos
+    if b >= 0xe0:
+        return b - 256, pos
+    if 0xa0 <= b <= 0xbf:
+        n = b & 0x1f
+        return data[pos:pos + n].decode(), pos + n
+    if b == 0xc0:
+        return None, pos
+    if b == 0xc2:
+        return False, pos
+    if b == 0xc3:
+        return True, pos
+    if b == 0xcb:
+        return struct.unpack('>d', data[pos:pos + 8])[0], pos + 8
+    if b == 0xcc:
+        return data[pos], pos + 1
+    if b == 0xcd:
+        return struct.unpack('>H', data[pos:pos + 2])[0], pos + 2
+    if b == 0xce:
+        return struct.unpack('>I', data[pos:pos + 4])[0], pos + 4
+    if 0x90 <= b <= 0x9f:
+        n = b & 0x0f
+        result = []
+        for _ in range(n):
+            val, pos = _msgpack_decode(data, pos)
+            result.append(val)
+        return result, pos
+    if b == 0xdc:
+        n = struct.unpack('>H', data[pos:pos + 2])[0]
+        pos += 2
+        result = []
+        for _ in range(n):
+            val, pos = _msgpack_decode(data, pos)
+            result.append(val)
+        return result, pos
+    if b == 0xd9:
+        n = data[pos]
+        pos += 1
+        return data[pos:pos + n].decode(), pos + n
+    raise ValueError(f"Unknown msgpack byte: 0x{b:02x}")
+
+
+def _rpc_call(method, *params, timeout=TIMEOUT_S):
+    """Chiamata RPC diretta via Unix socket. Ritorna result o None."""
+    msgid = 1
+    request = [0, msgid, method, list(params)]
+    packed = _msgpack_encode(request)
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(timeout)
+            s.connect(SOCKET_PATH)
+            s.sendall(packed)
+            resp = s.recv(65536)
+        if not resp:
+            return None
+        result, _ = _msgpack_decode(resp)
+        if isinstance(result, list) and len(result) >= 4:
+            return result[3]
+        return result
+    except (socket.timeout, ConnectionRefusedError, OSError, ValueError):
+        return None
+
+
+# ============================================================
+# RPC Client class
 # ============================================================
 class RouterClient:
-    """Client RPC per l'arduino-router via Unix socket."""
+    """Client RPC per l'arduino-router via Unix socket (zero dipendenze)."""
 
     def __init__(self, socket_path: str = SOCKET_PATH, timeout: int = TIMEOUT_S):
         self.socket_path = socket_path
@@ -57,7 +175,7 @@ class RouterClient:
         """Esegue una chiamata RPC al router."""
         msgid = self._next_id()
         request = [0, msgid, method, list(params)]
-        packed = msgpack.packb(request)
+        packed = _msgpack_encode(request)
 
         t = timeout or self.timeout
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
@@ -66,8 +184,9 @@ class RouterClient:
             client.sendall(packed)
             response_data = client.recv(65536)
 
-        response = msgpack.unpackb(response_data)
-        # Formato: [type, msgid, error, result]
+        response, _ = _msgpack_decode(response_data)
+        if not isinstance(response, list) or len(response) < 4:
+            raise RuntimeError(f"Invalid response format: {response}")
         if response[0] != 1:
             raise RuntimeError(f"Unexpected response type: {response[0]}")
         if response[2] is not None:
@@ -79,8 +198,7 @@ class RouterClient:
         try:
             result = self.call("$/listMethods", timeout=2)
             return result if isinstance(result, list) else []
-        except (RuntimeError, socket.timeout, ConnectionRefusedError,
-                msgpack.exceptions.UnpackException):
+        except (RuntimeError, socket.timeout, ConnectionRefusedError, ValueError):
             return []
 
     def ping_mcu(self) -> bool:
