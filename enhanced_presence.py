@@ -45,29 +45,63 @@ REPORT_DIR = os.path.dirname(os.path.abspath(__file__))
 # ============================================================
 _last_station_dump = {}
 _last_station_ts = 0
+_rssi_ema = None
+_RSSI_EMA_ALPHA = 0.3  # 0.0=ultra-smooth, 1.0=nessun filtro
+
+def _read_proc_rssi(iface: str) -> int | None:
+    """Legge RSSI da /proc/net/wireless (ultimo frame ricevuto).
+    Formato: wlan0: 0000   47.  -36.  -256  ...
+    Campo 3 (0-indexed) = signal level in dBm.
+    Lettura file: ~0ms, zero subprocess. Ritorna None se non disponibile."""
+    try:
+        prefix = f"{iface}:"
+        with open("/proc/net/wireless") as f:
+            for line in f:
+                if line.startswith(prefix):
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        return int(float(parts[3]))
+    except (FileNotFoundError, OSError, ValueError):
+        pass
+    return None
+
 
 def get_wifi_metrics(iface: str) -> dict:
-    """Raccoglie tutte le metriche WiFi disponibili."""
-    global _last_station_dump, _last_station_ts
+    """Raccoglie tutte le metriche WiFi disponibili.
+
+    Su Linux usa /proc/net/wireless per RSSI a 10-20 Hz (zero subprocess).
+    Fallback: iw link (funziona ovunque ma lento su UNO Q: ~2s per chiamata)."""
+    global _last_station_dump, _last_station_ts, _rssi_ema
 
     m = {}
     now = time.time()
 
-    # 1. iw link — veloce (10ms), sempre disponibile
-    try:
-        out = subprocess.check_output(
-            f"{IW} dev {iface} link", shell=True, timeout=2
-        ).decode()
-        m_ = re.search(r"signal:\s*(-?\d+)", out)
-        if m_: m["rssi"] = int(m_.group(1))
-        m_ = re.search(r"tx bitrate:\s*([\d.]+)", out)
-        if m_: m["tx_rate"] = float(m_.group(1))
-        m_ = re.search(r"rx bitrate:\s*([\d.]+)", out)
-        if m_: m["rx_rate"] = float(m_.group(1))
-        m_ = re.search(r"freq:\s*(\d+)", out)
-        if m_: m["freq"] = int(m_.group(1))
-    except Exception:
-        pass
+    # 1. /proc/net/wireless — RSSI ultimo frame (0ms, zero subprocess)
+    raw_rssi = _read_proc_rssi(iface)
+    if raw_rssi is not None:
+        # Filtro EMA: smussa il rumore sample-to-sample (±10 dBm)
+        if _rssi_ema is None:
+            _rssi_ema = float(raw_rssi)
+        else:
+            _rssi_ema = _RSSI_EMA_ALPHA * raw_rssi + (1 - _RSSI_EMA_ALPHA) * _rssi_ema
+        m["rssi"] = round(_rssi_ema)
+        m["rssi_raw"] = raw_rssi  # per debug / report
+    else:
+        # Fallback: iw link (Mac / sistemi senza /proc/net/wireless)
+        try:
+            out = subprocess.check_output(
+                f"{IW} dev {iface} link", shell=True, timeout=2
+            ).decode()
+            m_ = re.search(r"signal:\s*(-?\d+)", out)
+            if m_: m["rssi"] = int(m_.group(1))
+            m_ = re.search(r"tx bitrate:\s*([\d.]+)", out)
+            if m_: m["tx_rate"] = float(m_.group(1))
+            m_ = re.search(r"rx bitrate:\s*([\d.]+)", out)
+            if m_: m["rx_rate"] = float(m_.group(1))
+            m_ = re.search(r"freq:\s*(\d+)", out)
+            if m_: m["freq"] = int(m_.group(1))
+        except Exception:
+            pass
 
     # 2. station dump — metriche extra (aggiornato ogni 1s, costa ~10ms)
     if now - _last_station_ts >= 1.0:
@@ -95,10 +129,8 @@ def get_wifi_metrics(iface: str) -> dict:
             pass
 
     m.update(_last_station_dump)
-    # Usa signal_avg (filtrato dal driver Qualcomm) come RSSI primario
-    # se disponibile — è molto più stabile del raw "signal" su UNO Q
-    if m.get("signal_avg") is not None:
-        m["rssi"] = m["signal_avg"]
+    # NOTA: L'RSSI primario viene dall'EMA di /proc/net/wireless (10-20 Hz).
+    # signal_avg (station dump, 1 Hz) rimane come metrica separata per report.
     return m
 
 
@@ -122,11 +154,11 @@ def detect_gateway() -> str | None:
 
 
 def get_ping_metrics(gw: str = None) -> dict:
-    """Ping rapido (3 pacchetti) per stimare latenza."""
+    """Ping singolo rapido per stimare latenza. Cache 5s."""
     global _last_ping, _last_ping_ts
     now = time.time()
-    if now - _last_ping_ts < 1.0:
-        return _last_ping  # cache 1s
+    if now - _last_ping_ts < 5.0:
+        return _last_ping  # cache 5s
 
     g = gw or _gateway or detect_gateway()
     if not g:
@@ -134,7 +166,7 @@ def get_ping_metrics(gw: str = None) -> dict:
 
     try:
         out = subprocess.check_output(
-            f"ping -c 3 -W 1 {g}", shell=True, timeout=3
+            f"ping -c 1 -W 2 {g}", shell=True, timeout=3
         ).decode()
         m2 = {}
         m = re.search(r"rtt min/avg/max/mdev = [\d.]+/([\d.]+)/[\d.]+/([\d.]+)", out)
