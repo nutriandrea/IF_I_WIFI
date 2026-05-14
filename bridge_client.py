@@ -28,6 +28,7 @@ Usage:
 
 import socket
 import struct
+import select
 import sys
 import time
 import argparse
@@ -196,21 +197,31 @@ class RouterClient:
             client.settimeout(t)
             client.connect(self.socket_path)
             client.sendall(packed)
-            # Leggi in loop — il router può mandare dati in piu chunk
+            # Leggi in loop: il router Go fa write() separati per
+            # header e body → su Unix socket arrivano come recv() distinti.
+            # Usiamo select() con 10ms poll invece di un solo recv().
+            client.setblocking(False)
             response_data = b""
-            while True:
-                try:
-                    chunk = client.recv(65536)
-                    if not chunk:
-                        break
-                    response_data += chunk
-                    if DEBUG:
-                        print(f"    [DEBUG] Chunk ({len(chunk)} bytes): {chunk.hex()}")
-                    # Se abbiamo abbastanza bytes per un msgpack completo, esci
-                    if len(chunk) < 65536:
-                        break
-                except socket.timeout:
-                    break
+            polls = 0
+            while polls < 20:  # max 20 tentativi (~200ms polling)
+                ready = select.select([client], [], [], 0.01)
+                if ready[0]:
+                    try:
+                        chunk = client.recv(65536)
+                        if not chunk:
+                            break
+                        response_data += chunk
+                        polls = 0  # reset: nuovi dati, continua
+                        if DEBUG:
+                            print(f"    [DEBUG] Chunk ({len(chunk)} bytes): {chunk.hex()}")
+                    except BlockingIOError:
+                        polls += 1
+                else:
+                    if response_data:
+                        polls += 1  # nessun dato nuovo
+                    else:
+                        polls += 1  # aspetta primo dato
+            client.setblocking(True)
 
         if DEBUG:
             print(f"    [DEBUG] Total response ({len(response_data)} bytes): {response_data.hex()}")
