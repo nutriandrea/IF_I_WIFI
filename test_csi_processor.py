@@ -5,7 +5,7 @@ Self-contained: nessuna importazione da file di calibrazione.
 """
 import sys, os, json, math, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from csi_processor import parse_csi_csv, CSIDetector
+from csi_processor import parse_csi_line, CSIDetector
 
 
 # ============================================================
@@ -59,13 +59,13 @@ def _fake_csi_line(rssi: int = -45, num_sub: int = 64,
 
 
 # ============================================================
-# Test: parse_csi_csv
+# Test: parse_csi_line
 # ============================================================
 
 def test_parse_valid_csv():
     """Linea CSI_DATA valida produce dict strutturato."""
     line = _fake_csi_line(rssi=-45, num_sub=64)
-    result = parse_csi_csv(line)
+    result = parse_csi_line(line)
     assert result is not None, "Valid CSI_DATA should be parsed"
     # Il prefisso "CSI_DATA" viene consumato; result["type"] è il campo dopo
     assert result["type"] == "1"  # type field value dopo il prefisso CSI_DATA
@@ -78,15 +78,15 @@ def test_parse_valid_csv():
 
 def test_parse_invalid_prefix():
     """Linee non CSI_DATA vengono scartate."""
-    assert parse_csi_csv("NOT_CSI,1,2,3") is None
-    assert parse_csi_csv("") is None
-    assert parse_csi_csv("CSI_DATA") is None  # too few fields
+    assert parse_csi_line("NOT_CSI,1,2,3") is None
+    assert parse_csi_line("") is None
+    assert parse_csi_line("CSI_DATA") is None  # too few fields
 
 
 def test_parse_csi_complex_values():
     """Verifica che i valori complessi siano parsati correttamente."""
     line = _fake_csi_line(num_sub=2, ampl_mean=10.0, ampl_std=0)
-    result = parse_csi_csv(line)
+    result = parse_csi_line(line)
     assert result is not None
     assert result["num_subcarriers"] == 2
     # Subcarrier 0
@@ -105,7 +105,7 @@ def test_parse_mac_address():
     """MAC address viene estratto correttamente."""
     mac = "12:34:56:78:9a:bc"
     line = _fake_csi_line(mac=mac)
-    result = parse_csi_csv(line)
+    result = parse_csi_line(line)
     assert result is not None
     assert result["mac"] == mac
 
@@ -114,7 +114,7 @@ def test_parse_different_sizes():
     """Supporto per 32, 64, 128, 256 subcarrier."""
     for num_sub in [32, 64, 128]:
         line = _fake_csi_line(num_sub=num_sub)
-        result = parse_csi_csv(line)
+        result = parse_csi_line(line)
         assert result is not None
         assert result["num_subcarriers"] == num_sub
         assert len(result["csi"]) == num_sub
@@ -123,7 +123,7 @@ def test_parse_different_sizes():
 def test_parse_all_fields_present():
     """Tutti i campi dell'header CSI_DATA sono parsati."""
     line = _fake_csi_line(rssi=-55, channel=6, mac="aa:bb:cc:dd:ee:ff")
-    result = parse_csi_csv(line)
+    result = parse_csi_line(line)
     assert result is not None
     for field in ["type", "role", "mac", "rssi", "rate", "sig_mode", "mcs",
                   "bandwidth", "channel", "noise_floor", "ant", "len"]:
@@ -248,12 +248,12 @@ def test_detector_with_realistic_data():
 
     # Calibrazione su stanza vuota
     for i in range(25):
-        frame = parse_csi_csv(line_empty)
+        frame = parse_csi_line(line_empty)
         assert frame is not None
         det.update(frame)
 
     # Occupato
-    frame = parse_csi_csv(line_occupied)
+    frame = parse_csi_line(line_occupied)
     assert frame is not None
     presence, info = det.update(frame)
     assert presence, (
@@ -301,6 +301,97 @@ def test_many_frames_no_memory_leak():
     assert len(det.ampl_std_hist) <= 50
     assert len(det.ampl_mean_hist) <= 50
     assert len(det.rssi_hist) <= 50
+
+
+# ============================================================
+# Test: Nuovo formato CSI (CSI:<seq>:...)
+# ============================================================
+
+def _fake_new_csi_line(rssi: int = -45, sub_count: int = 64,
+                       ampl_mean: float = 10.0, ampl_std: float = 2.0) -> str:
+    """Genera una linea nel nuovo formato CSI:<seq>:... per test.
+    I dati sono interi (int8) come dal firmware ESP32 reale."""
+    import random
+    random.seed(7)
+
+    parts = [
+        "CSI:1",         # seq=1
+        str(rssi),       # rssi
+        "-90",           # noise_floor
+        "72",            # rate
+        "20",            # bandwidth
+        str(sub_count),  # sub_count
+    ]
+
+    # Genera dati interi (int8 come firmware reale)
+    vals = []
+    for _ in range(sub_count):
+        re = int(random.gauss(ampl_mean, ampl_std))
+        im = int(random.gauss(ampl_mean * 0.3, ampl_std * 0.3))
+        vals.append(str(re))
+        vals.append(str(im))
+    parts.append(",".join(vals))
+
+    return ":".join(parts)
+
+
+def test_new_format_parse():
+    """Nuovo formato CSI:<seq>:... parsato correttamente."""
+    line = _fake_new_csi_line(rssi=-45, sub_count=64)
+    result = parse_csi_line(line)
+    assert result is not None, "Valid new format should be parsed"
+    assert result["rssi"] == -45
+    assert result["num_subcarriers"] == 64
+    assert len(result["csi"]) == 64
+    assert result["seq"] == 1
+    assert result["noise_floor"] == -90
+    assert result["rate"] == 72
+    assert result["bandwidth"] == 20
+    for k in ("ampl_mean", "ampl_std", "ampl_max", "ampl_min"):
+        assert k in result, f"Missing field: {k}"
+
+
+def test_new_format_invalid():
+    """Linee malformate nel nuovo formato vengono scartate."""
+    assert parse_csi_line("CSI:x:bad") is None
+    assert parse_csi_line("CSI:") is None
+    assert parse_csi_line("") is None
+
+
+def test_new_format_subcarrier_values():
+    """Valori complessi parsati correttamente nel nuovo formato."""
+    line = _fake_new_csi_line(sub_count=2, ampl_mean=10.0, ampl_std=0)
+    result = parse_csi_line(line)
+    assert result is not None
+    assert result["num_subcarriers"] == 2
+    assert "real" in result["csi"][0]
+    assert "imag" in result["csi"][0]
+    assert "ampl" in result["csi"][0]
+    assert "phase" in result["csi"][0]
+    assert result["csi"][0]["subcarrier"] == 0
+    assert result["csi"][1]["subcarrier"] == 1
+
+
+def test_new_format_zero_subcarriers():
+    """Nuovo formato con 0 subcarrier non crasha."""
+    line = "CSI:1:-45:-90:72:20:0:"
+    result = parse_csi_line(line)
+    assert result is not None
+    assert result["num_subcarriers"] == 0
+    assert result["csi"] == []
+
+
+def test_both_formats_consistent():
+    """Vecchio e nuovo formato producono ampl_std simili per stessi dati."""
+    line_old = _fake_csi_line(rssi=-50, num_sub=32, ampl_mean=10.0, ampl_std=3.0)
+    line_new = _fake_new_csi_line(rssi=-50, sub_count=32, ampl_mean=10.0, ampl_std=3.0)
+    r_old = parse_csi_line(line_old)
+    r_new = parse_csi_line(line_new)
+    assert r_old is not None and r_new is not None
+    # ampl_std dovrebbe essere simile (stessa distribuzione)
+    assert abs(r_old["ampl_std"] - r_new["ampl_std"]) < 2.5, (
+        f"ampl_std mismatch: old={r_old['ampl_std']:.2f} new={r_new['ampl_std']:.2f}"
+    )
 
 
 # ============================================================

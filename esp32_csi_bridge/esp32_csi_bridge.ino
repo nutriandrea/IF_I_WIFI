@@ -10,25 +10,25 @@
  *   ESP32 5V   → UNO Q 5V
  *   ESP32 TX   → UNO Q D0 (MCU RX = Serial1 RX)
  *   ESP32 RX   → UNO Q D1 (MCU TX = Serial1 TX)
- *   Baud rate: 115200
+ *   Baud rate: 921600
  *
  * RPC funzioni esposte:
  *   csi_ping()         -> "pong" o errore
  *   csi_count()        -> int (frame bufferizzati)
- *   csi_read_all()     -> [string, ...] (frame CSI, svuota buffer)
+ *   csi_read_all()     -> string (frame CSI newline-separati, svuota buffer)
  *   csi_clear()        -> true
  *
  * LED_BUILTIN:
  *   3 lampeggi rapidi  -> boot
- *   1 lungo            -> bridge OK
- *   2 rapidi + pausa   -> ESP32 non rilevata
+ *   1 lungo            -> bridge OK + ESP32 OK
+ *   2 rapidi + pausa   -> bridge OK ma ESP32 non rilevata
  */
 
 #include <Arduino_RouterBridge.h>
 
-#define SERIAL_BAUD    115200
-#define CSI_BUF_MAX    30           // max frame in buffer (RAM limit ~2 KB)
-#define CSI_LINE_MAX   512          // max lunghezza singolo frame CSI
+#define SERIAL_BAUD    921600
+#define CSI_BUF_MAX    10            // frame in buffer (4096 byte cad. = 40 KB)
+#define CSI_LINE_MAX   4096          // max lunghezza frame CSI (128 subcarrier × 2 × ~10 char)
 
 // ESP32 su D0 (RX) / D1 (TX) — Serial1 del MCU
 #define ESP32_SERIAL  Serial1
@@ -40,7 +40,7 @@ static bool esp32_ok = false;
 
 // === Timer per polling ESP32 ===
 static unsigned long last_esp32_poll = 0;
-#define ESP32_POLL_MS 50  // 20 Hz lettura da ESP32
+#define ESP32_POLL_MS 10  // 100 Hz lettura da ESP32
 
 // === LED blink helper ===
 static unsigned long _blink_until = 0;
@@ -77,8 +77,8 @@ static bool blink_tick() {
         } else {
             _blink_count++;
             _blink_until = (_blink_count >= _blink_target)
-                ? millis()
-                : millis() + _blink_ms_off;
+                           ? millis()
+                           : millis() + _blink_ms_off;
         }
     }
     return true;
@@ -96,6 +96,8 @@ static void esp32_send_cmd(const char* cmd) {
     ESP32_SERIAL.println(cmd);
 }
 
+// Legge una linea da ESP32 Serial1 (fino a newline o timeout)
+// Ritorna lunghezza, 0 se timeout.
 static int esp32_read_line(char* buf, int max_len, int timeout_ms) {
     unsigned long deadline = millis() + timeout_ms;
     int idx = 0;
@@ -109,7 +111,6 @@ static int esp32_read_line(char* buf, int max_len, int timeout_ms) {
             if (c != '\r') buf[idx++] = c;
         }
         if (idx > 0) {
-            // timeout extended if we already started receiving
             deadline = millis() + 20;
         }
     }
@@ -127,13 +128,13 @@ static void esp32_poll() {
 
     while (ESP32_SERIAL.available() && csi_buffer_count < CSI_BUF_MAX) {
         char line[CSI_LINE_MAX];
-        int len = esp32_read_line(line, CSI_LINE_MAX, 10);
+        int len = esp32_read_line(line, CSI_LINE_MAX, 5);
         if (len > 0) {
             strncpy(csi_buffer[csi_buffer_count], line, CSI_LINE_MAX - 1);
             csi_buffer[csi_buffer_count][CSI_LINE_MAX - 1] = '\0';
             csi_buffer_count++;
         } else {
-            break;  // no more complete lines
+            break;
         }
     }
 }
@@ -150,6 +151,7 @@ String csi_ping() {
     char resp[64];
     int len = esp32_read_line(resp, sizeof(resp), 500);
     if (len > 0) {
+        // Se arriva "pong:OK" va bene, altrimenti riporta risposta
         return String("pong:") + String(resp);
     }
     return String("ESP32_NO_RESPONSE");
@@ -160,14 +162,12 @@ int csi_count() {
 }
 
 String csi_read_all() {
-    // Pack all buffered frames into one big string, newline-separated
-    // Each frame is a single line
     String result;
     for (int i = 0; i < csi_buffer_count; i++) {
         if (i > 0) result += "\n";
         result += String(csi_buffer[i]);
     }
-    csi_buffer_count = 0;  // svuota buffer
+    csi_buffer_count = 0;
     return result;
 }
 
@@ -187,12 +187,12 @@ static int register_methods() {
     ok &= Bridge.provide("csi_count", csi_count);
     ok &= Bridge.provide_safe("csi_read_all", csi_read_all);
     ok &= Bridge.provide("csi_clear", csi_clear);
-    return ok ? 2 : 3;  // BRIDGE_OK or BRIDGE_PARTIAL
+    return ok ? 2 : 3;
 }
 
 static int try_bridge_init() {
     if (Bridge.is_started()) return register_methods();
-    if (!Bridge.begin()) return 1;  // BRIDGE_RETRY
+    if (!Bridge.begin()) return 1;
     return register_methods();
 }
 
@@ -204,10 +204,9 @@ void setup() {
     pinMode(LED_BUILTIN, OUTPUT);
     digitalWrite(LED_BUILTIN, LOW);
 
-    // 3 lampeggi = boot
     blink_start(3, 80, 80);
 
-    // Serial1 = D0/D1 verso ESP32
+    // Serial1 = D0/D1 verso ESP32 a 921600 baud
     ESP32_SERIAL.begin(SERIAL_BAUD);
     delay(200);
     esp32_flush();
@@ -219,16 +218,15 @@ void setup() {
     if (len > 0 && strstr(resp, "pong") != NULL) {
         esp32_ok = true;
     } else {
-        // ESP32 non risponde — continuiamo lo stesso
         esp32_ok = false;
     }
 
     // Inizializza bridge
     int state = try_bridge_init();
-    if (state == 2) {
-        blink_start(1, 500, 0);  // 1 lungo = OK
+    if (state == 2 && esp32_ok) {
+        blink_start(1, 500, 0);
     } else if (!esp32_ok) {
-        blink_start(2, 80, 80);  // 2 rapidi = bridge OK ma no ESP32
+        blink_start(2, 80, 80);
     }
 
     last_esp32_poll = millis();
@@ -236,10 +234,6 @@ void setup() {
 
 void loop() {
     blink_tick();
-
-    // Poll ESP32 per nuovi dati CSI
     esp32_poll();
-
-    // Bridge.update() gestito automaticamente da Zephyr thread
     delay(1);
 }
