@@ -499,6 +499,10 @@ def main():
                 errors += 1
         elapsed = time.time() - t0
         rate = ok / elapsed if elapsed > 0 else 0
+        print(f"  Chiamate: {n_calls}, OK: {ok}, Errori: {errors}")
+        print(f"  Throughput: {rate:.1f} call/s ({elapsed:.1f}s totali)")
+        print(f"  {'OK' if ok / max(n_calls, 1) > 0.5 else 'FAIL'} "
+              f"RPC {'funzionante' if ok > n_calls / 2 else 'instabile'}")
 
     # --- Raw RPC call ---
     elif args.call:
@@ -512,17 +516,6 @@ def main():
             print(f"  Response: {result!r}")
         except Exception as e:
             print(f"  Error: {e}")
-
-    else:
-                    errors += 1
-            except Exception:
-                errors += 1
-        elapsed = time.time() - t0
-        rate = ok / elapsed if elapsed > 0 else 0
-        print(f"  Chiamate: {n_calls}, OK: {ok}, Errori: {errors}")
-        print(f"  Throughput: {rate:.1f} call/s ({elapsed:.1f}s totali)")
-        print(f"  {'✅' if ok/ max(n_calls,1) > 0.5 else '❌'} "
-              f"RPC {'funzionante' if ok > n_calls/2 else 'instabile'}")
 
     else:
         parser.print_help()
