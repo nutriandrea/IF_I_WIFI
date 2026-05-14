@@ -15,7 +15,7 @@ Flags:
   --install-deps   Prova ad installare iw e pyserial automaticamente
 """
 
-import subprocess, time, json, sys, os, re, shutil, argparse, socket, struct
+import subprocess, time, json, sys, os, re, shutil, argparse, socket, struct, select
 from datetime import datetime
 from collections import deque
 from statistics import mean, stdev
@@ -516,7 +516,24 @@ def _rpc_call(method, *params, timeout=3):
             s.settimeout(timeout)
             s.connect(ROUTER_SOCKET)
             s.sendall(packed)
-            resp_data = s.recv(65536)
+            # Select loop: il router Go fa write() separati
+            s.setblocking(False)
+            resp_data = b""
+            polls = 0
+            while polls < 20:
+                ready = select.select([s], [], [], 0.01)
+                if ready[0]:
+                    try:
+                        chunk = s.recv(65536)
+                        if not chunk:
+                            break
+                        resp_data += chunk
+                        polls = 0
+                    except BlockingIOError:
+                        polls += 1
+                else:
+                    polls += 1
+            s.setblocking(True)
         if not resp_data:
             return None
         result, _ = _msgpack_decode(resp_data)
