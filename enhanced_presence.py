@@ -95,6 +95,10 @@ def get_wifi_metrics(iface: str) -> dict:
             pass
 
     m.update(_last_station_dump)
+    # Usa signal_avg (filtrato dal driver Qualcomm) come RSSI primario
+    # se disponibile — è molto più stabile del raw "signal" su UNO Q
+    if m.get("signal_avg") is not None:
+        m["rssi"] = m["signal_avg"]
     return m
 
 
