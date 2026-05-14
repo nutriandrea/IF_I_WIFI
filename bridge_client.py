@@ -106,6 +106,8 @@ def _msgpack_decode(data, pos=0):
         return False, pos
     if b == 0xc3:
         return True, pos
+    if b == 0xca:
+        return struct.unpack('>f', data[pos:pos + 4])[0], pos + 4
     if b == 0xcb:
         return struct.unpack('>d', data[pos:pos + 8])[0], pos + 8
     if b == 0xcc:
@@ -114,6 +116,12 @@ def _msgpack_decode(data, pos=0):
         return struct.unpack('>H', data[pos:pos + 2])[0], pos + 2
     if b == 0xce:
         return struct.unpack('>I', data[pos:pos + 4])[0], pos + 4
+    if b == 0xd0:
+        return struct.unpack('>b', data[pos:pos + 1])[0], pos + 1
+    if b == 0xd1:
+        return struct.unpack('>h', data[pos:pos + 2])[0], pos + 2
+    if b == 0xd2:
+        return struct.unpack('>i', data[pos:pos + 4])[0], pos + 4
     if 0x90 <= b <= 0x9f:
         n = b & 0x0f
         result = []
@@ -226,7 +234,10 @@ class RouterClient:
         if response[0] != 1:
             raise RuntimeError(f"Unexpected response type: {response[0]}")
         if response[2] is not None:
-            raise RuntimeError(f"RPC error: {response[2]}")
+            err = response[2]
+            if isinstance(err, list) and len(err) >= 2:
+                raise RuntimeError(f"code={err[0]}: {err[1]}")
+            raise RuntimeError(f"RPC error: {err}")
         return response[3]
 
     def discover_methods(self) -> list[str]:
@@ -242,6 +253,14 @@ class RouterClient:
         try:
             result = self.call("ping", timeout=3)
             return result is True or result == "true"
+        except RuntimeError as e:
+            msg = str(e)
+            print(f"    RPC error: {msg}")
+            if "method" in msg and "not available" in msg:
+                print(f"    -> Il metodo 'ping' non e registrato sullo STM32.")
+                print(f"    -> Lo sketch e stato caricato correttamente?")
+                print(f"    -> Bridge.provide('ping', ping) chiamato in setup()?")
+            return False
         except Exception as e:
             print(f"    Ping error: {e}")
             return False

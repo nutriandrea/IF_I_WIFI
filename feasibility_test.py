@@ -487,6 +487,12 @@ def _msgpack_decode(data, pos=0):
         sizes = {0xcc: 1, 0xcd: 2, 0xce: 4}
         n = int.from_bytes(data[pos:pos+sizes[b]], 'big')
         return n, pos + sizes[b]
+    if b == 0xca:
+        return struct.unpack('>f', data[pos:pos+4])[0], pos+4
+    if b == 0xd0:
+        return struct.unpack('>b', data[pos:pos+1])[0], pos+1
+    if b == 0xd1:
+        return struct.unpack('>h', data[pos:pos+2])[0], pos+2
     if 0x90 <= b <= 0x9f:
         n = b & 0x0f; result = []
         for _ in range(n): val, pos = _msgpack_decode(data, pos); result.append(val)
