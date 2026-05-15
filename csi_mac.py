@@ -25,6 +25,8 @@ Dipendenze: pip install pyserial
 from __future__ import annotations
 import argparse
 import glob
+import json
+import os
 import signal
 import sys
 import time
@@ -40,6 +42,17 @@ except ImportError:
 
 # Riusa parser e detector esistenti
 from csi_processor import parse_csi_line, CSIDetector
+
+# CSI ML Classifier: import lazy
+try:
+    from csi_ml import CSIClassifier, CSI_CLASSES, CSI_LABELS, CSI_MODEL_PATH
+    _CSI_ML_AVAILABLE = True
+except ImportError:
+    CSIClassifier = None
+    CSI_CLASSES = {}
+    CSI_LABELS = []
+    CSI_MODEL_PATH = None
+    _CSI_ML_AVAILABLE = False
 
 DEFAULT_BAUD = 921600
 
@@ -87,16 +100,44 @@ def open_port(port: Optional[str], baud: int) -> serial.Serial:
 # ============================================================
 def cmd_monitor(args) -> int:
     ser = open_port(args.port, args.baud)
-    det = CSIDetector(
-        window_size=args.window,
-        ampl_threshold=args.ampl_th,
-        var_threshold=args.var_th,
-    )
+    ml_clf = None
+    det = None
+    use_ml = args.use_ml
 
-    print(f"\n  Monitor CSI — Ctrl+C per uscire")
-    print(f"  {'t(s)':>6} {'seq':>5} {'subc':>4} {'ampl_mean':>9} "
-          f"{'ampl_std':>8} {'RSSI':>5} {'score':>5}  Stato")
-    print(f"  {'-'*60}")
+    if use_ml:
+        if not _CSI_ML_AVAILABLE or CSIClassifier is None:
+            print("  [ML] sklearn non installato. Uso CSIDetector classico.",
+                  file=sys.stderr)
+            use_ml = False
+        else:
+            assert CSIClassifier is not None
+            ml_clf = CSIClassifier(window_frames=30)
+            model_file = args.ml_model or CSI_MODEL_PATH
+            if model_file and os.path.exists(model_file):
+                ml_clf.load(model_file)
+                print(f"  Modello ML caricato da: {model_file}", file=sys.stderr)
+            else:
+                print(f"  Modello ML non trovato, uso CSIDetector classico.",
+                      file=sys.stderr)
+                use_ml = False
+
+    if not use_ml:
+        det = CSIDetector(
+            window_size=args.window,
+            ampl_threshold=args.ampl_th,
+            var_threshold=args.var_th,
+        )
+
+    if use_ml:
+        print(f"\n  CSI ML Monitor — Ctrl+C per uscire")
+        print(f"  {'t(s)':>5} {'RSSI':>5} {'EMPTY':>7} {'STILL':>7} "
+              f"{'MOVE':>7} {'Classe':>12}")
+        print(f"  {'-'*48}")
+    else:
+        print(f"\n  Monitor CSI — Ctrl+C per uscire")
+        print(f"  {'t(s)':>6} {'seq':>5} {'subc':>4} {'ampl_mean':>9} "
+              f"{'ampl_std':>8} {'RSSI':>5} {'score':>5}  Stato")
+        print(f"  {'-'*60}")
 
     t0 = time.time()
     last_status = False
@@ -125,27 +166,48 @@ def cmd_monitor(args) -> int:
                 skipped += 1
                 continue
             seen += 1
-            presence, info = det.update(parsed)
 
-            if seen % args.print_every == 0:
-                t = time.time() - t0
-                status = "PRESENTE!" if presence else "vuoto"
-                if presence != last_status:
-                    status = ">> " + status
-                    last_status = presence
-                print(f"  {t:>6.1f} "
-                      f"{parsed.get('seq', 0):>5} "
-                      f"{parsed.get('num_subcarriers', 0):>4} "
-                      f"{parsed.get('ampl_mean', 0):>9.2f} "
-                      f"{parsed.get('ampl_std', 0):>8.2f} "
-                      f"{parsed.get('rssi', 0):>+5d} "
-                      f"{info['score']:>5.1f}  {status}",
-                      flush=True)
+            if use_ml:
+                assert ml_clf is not None
+                parsed["_t"] = round(time.time() - t0, 3)
+                ml_clf.add_frame(parsed)
+                probas = ml_clf.predict_proba()
+                cls = ml_clf.predict()
+
+                if seen % args.print_every == 0:
+                    t = time.time() - t0
+                    print(f"  {t:>5.1f} "
+                          f"{parsed.get('rssi', 0):>+5d} "
+                          f"{probas.get('EMPTY', 0):>7.3f} "
+                          f"{probas.get('STATIONARY', 0):>7.3f} "
+                          f"{probas.get('MOVEMENT', 0):>7.3f} "
+                          f"{cls:>12}",
+                          flush=True)
+            else:
+                assert det is not None
+                presence, info = det.update(parsed)
+                if seen % args.print_every == 0:
+                    t = time.time() - t0
+                    status = "PRESENTE!" if presence else "vuoto"
+                    if presence != last_status:
+                        status = ">> " + status
+                        last_status = presence
+                    print(f"  {t:>6.1f} "
+                          f"{parsed.get('seq', 0):>5} "
+                          f"{parsed.get('num_subcarriers', 0):>4} "
+                          f"{parsed.get('ampl_mean', 0):>9.2f} "
+                          f"{parsed.get('ampl_std', 0):>8.2f} "
+                          f"{parsed.get('rssi', 0):>+5d} "
+                          f"{info['score']:>5.1f}  {status}",
+                          flush=True)
     finally:
         ser.close()
 
-    print(f"\n  visti={seen}  ignorati={skipped}  calibrato={det.calibrated}",
+    print(f"\n  visti={seen}  ignorati={skipped}",
           file=sys.stderr)
+    if not use_ml:
+        assert det is not None
+        print(f"  calibrato={det.calibrated}", file=sys.stderr)
     return 0
 
 
@@ -238,8 +300,13 @@ def _stats(vals: list[float]) -> dict:
 
 def cmd_calibrate(args) -> int:
     ser = open_port(args.port, args.baud)
+    train_ml = args.train_ml
+
     try:
         baseline = _collect_frames(ser, args.seconds, "baseline")
+        stationary = None
+        if train_ml and args.stationary_seconds > 0:
+            stationary = _collect_frames(ser, args.stationary_seconds, "stationary")
         movement = _collect_frames(ser, args.seconds, "movement")
     finally:
         ser.close()
@@ -284,6 +351,38 @@ def cmd_calibrate(args) -> int:
     if best[1] < 0.1:
         print("  Detection RSSI/ampl insufficiente — l'ambiente o "
               "il setup CSI non distingue baseline da movement.")
+
+    # Training ML
+    if train_ml:
+        print(f"\n{'='*60}")
+        print(f"  TRAINING CSI ML CLASSIFIER")
+        print(f"{'='*60}")
+        if not _CSI_ML_AVAILABLE or CSIClassifier is None:
+            print("  [ML] sklearn non installato. Salta training ML.")
+            print("  Installa: pip install scikit-learn joblib")
+        else:
+            assert CSIClassifier is not None
+            try:
+                clf = CSIClassifier(window_frames=30)
+                metrics = clf.train(baseline, stationary, movement)
+                save_path = args.ml_model or CSI_MODEL_PATH or "csi_model.joblib"
+                clf.save(save_path)
+                print(f"  Training completato: {metrics['n_train']} campioni, "
+                      f"{metrics['n_classes']} classi")
+
+                # Salva frame come JSON
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                out_dir = args.out_dir or "csi_logs"
+                Path(out_dir).mkdir(exist_ok=True)
+                for label, frames in [("empty", baseline), ("stationary", stationary), ("movement", movement)]:
+                    if frames:
+                        path = Path(out_dir) / f"CSI_ML_{label}_{ts}.json"
+                        with open(path, "w") as f:
+                            json.dump({"label": label, "frames": frames}, f, indent=2)
+                        print(f"  Salvato: {path}")
+            except Exception as e:
+                print(f"  ERRORE training ML: {e}")
+
     return 0
 
 
@@ -313,6 +412,15 @@ def main() -> int:
     ap.add_argument("--var-th", type=float, default=1.5)
     ap.add_argument("--print-every", type=int, default=5,
                     help="Stampa ogni N frame in --monitor (default 5)")
+    # ML flags
+    ap.add_argument("--use-ml", action="store_true",
+                    help="Usa CSIClassifier (ML) invece di CSIDetector")
+    ap.add_argument("--train-ml", action="store_true",
+                    help="Addestra CSIClassifier dopo la calibrazione")
+    ap.add_argument("--ml-model", type=str, default=None,
+                    help="Percorso modello .joblib (default: csi_model.joblib)")
+    ap.add_argument("--stationary-seconds", type=int, default=0,
+                    help="Secondi per fase STATIONARY (0=salta, default: 0)")
     args = ap.parse_args()
 
     if args.monitor:

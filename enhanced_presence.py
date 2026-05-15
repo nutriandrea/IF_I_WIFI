@@ -31,6 +31,15 @@ from datetime import datetime
 from collections import deque
 from statistics import mean, stdev
 
+# ML Classifier: import lazy per non rompere senza sklearn
+try:
+    from rssi_ml import RSSIClassifier, RSSI_MODEL_PATH
+    _RSSI_ML_AVAILABLE = True
+except ImportError:
+    RSSIClassifier = None
+    RSSI_MODEL_PATH = None
+    _RSSI_ML_AVAILABLE = False
+
 # ============================================================
 # Config
 # ============================================================
@@ -477,37 +486,113 @@ def analyze(baseline: list[dict], movement: list[dict]):
 
 
 # ============================================================
+# ML Training (dopo calibrazione)
+# ============================================================
+
+def train_rssi_ml(baseline: list, movement: list, save: bool = True) -> RSSIClassifier | None:
+    """Addestra RSSIClassifier su dati di calibrazione.
+
+    Args:
+        baseline: campioni RSSI stanza vuota (label=0)
+        movement: campioni RSSI con movimento (label=1)
+        save: se True, salva il modello su disco
+
+    Returns:
+        RSSIClassifier addestrato, o None se sklearn non disponibile.
+    """
+    if not _RSSI_ML_AVAILABLE or RSSIClassifier is None:
+        print("\n  [ML] sklearn non installato. Installa con:")
+        print("    UNO Q: sudo apt install python3-sklearn python3-joblib")
+        print("    Mac:   pip install scikit-learn joblib")
+        return None
+
+    print(f"\n{'='*60}")
+    print(f"  TRAINING RSSI ML CLASSIFIER")
+    print(f"{'='*60}")
+
+    try:
+        clf = RSSIClassifier(window_size=20)
+        metrics = clf.train(baseline, movement)
+        if save:
+            clf.save()
+        return clf
+    except Exception as e:
+        print(f"\n  [ML] ERRORE training: {e}")
+        return None
+
+
+# ============================================================
 # Monitor real-time
 # ============================================================
-def monitor(iface: str, grad_th: float = 1.0, cons_th: int = 3):
-    """Monitoraggio real-time con GradientDetector."""
+def monitor(iface: str, grad_th: float = 1.0, cons_th: int = 3,
+            use_ml: bool = False, ml_model_path: str | None = None):
+    """Monitoraggio real-time. Usa GradientDetector o RSSIClassifier in base a use_ml."""
     gw = detect_gateway()
-    det = GradientDetector(grad_threshold=grad_th,
-                           consecutive_threshold=cons_th)
+
+    if use_ml:
+        if not _RSSI_ML_AVAILABLE or RSSIClassifier is None:
+            print("  [ML] sklearn non installato, uso GradientDetector classico.")
+            use_ml = False
+        else:
+            ml_clf = RSSIClassifier(window_size=20)
+            model_file = ml_model_path or RSSI_MODEL_PATH
+            if model_file and os.path.exists(model_file):
+                ml_clf.load(model_file)
+                print(f"  Modello ML caricato da: {model_file}")
+            else:
+                print(f"  Modello ML non trovato in: {model_file}")
+                print("  Esegui --train-ml dopo la calibrazione.")
+                use_ml = False
+
+    if not use_ml:
+        det = GradientDetector(grad_threshold=grad_th,
+                               consecutive_threshold=cons_th)
 
     print(f"\n  Monitoraggio real-time")
-    print(f"  Soglia gradiente: {grad_th}, consecutive: {cons_th}")
+    print(f"  Metodo: {'RSSIClassifier (ML)' if use_ml else 'GradientDetector (soglie)'}")
+
+    if use_ml and ml_clf.trained:
+        print(f"  Feature importance:")
+        for name, imp in ml_clf.feature_importance.items():
+            print(f"    {name}: {imp:.4f}")
+    else:
+        print(f"  Soglia gradiente: {grad_th}, consecutive: {cons_th}")
+
     print(f"  Gateway: {gw or 'N/D'}")
-    print(f"  {'Tempo':>6} {'RSSI':>6} {'SigAvg':>7} {'Grad':>5} {'Ping':>6} {'Score':>6} {'Stato':>10}")
-    print(f"  {'-'*52}")
+    if use_ml:
+        print(f"  {'Tempo':>6} {'RSSI':>6} {'SigAvg':>7} {'ML Prob':>8} {'Stato':>12}")
+        print(f"  {'-'*45}")
+    else:
+        print(f"  {'Tempo':>6} {'RSSI':>6} {'SigAvg':>7} {'Grad':>5} {'Ping':>6} {'Score':>6} {'Stato':>10}")
+        print(f"  {'-'*52}")
 
     start = time.time()
-    t_prev = start
     try:
         while True:
             now = time.time()
             metrics = get_detector_metrics(iface, gw)
-            presence, debug = det.update(metrics)
             t = now - start
 
-            # Formatta output
-            rssi_s = str(metrics.get("rssi", "-")) if metrics.get("rssi") is not None else "-"
-            sa_s = str(metrics.get("signal_avg", "-"))
-            grad_s = f"{debug.get('grad', 0):+.0f}" if "grad" in debug else "-"
-            ping_s = f"{metrics.get('ping_avg', 0):.0f}" if metrics.get("ping_avg") is not None else "-"
-            score_s = f"{debug['score']:.1f}"
-            status_s = "PRESENTE!" if presence else "vuoto"
-            print(f"  {t:>6.1f} {rssi_s:>6} {sa_s:>7} {grad_s:>5} {ping_s:>6} {score_s:>6} {status_s:>10}")
+            if use_ml:
+                rssi = metrics.get("rssi")
+                if rssi is not None:
+                    ml_clf.add_sample(float(rssi))
+                if ml_clf.ready:
+                    prob = ml_clf.predict_proba()
+                    presence = prob >= 0.5
+                    status_s = "PRESENTE!" if presence else "vuoto"
+                    rssi_s = str(metrics.get("rssi", "-")) if metrics.get("rssi") is not None else "-"
+                    sa_s = str(metrics.get("signal_avg", "-"))
+                    print(f"  {t:>6.1f} {rssi_s:>6} {sa_s:>7} {prob:>8.3f} {status_s:>12}")
+            else:
+                presence, debug = det.update(metrics)
+                rssi_s = str(metrics.get("rssi", "-")) if metrics.get("rssi") is not None else "-"
+                sa_s = str(metrics.get("signal_avg", "-"))
+                grad_s = f"{debug.get('grad', 0):+.0f}" if "grad" in debug else "-"
+                ping_s = f"{metrics.get('ping_avg', 0):.0f}" if metrics.get("ping_avg") is not None else "-"
+                score_s = f"{debug['score']:.1f}"
+                status_s = "PRESENTE!" if presence else "vuoto"
+                print(f"  {t:>6.1f} {rssi_s:>6} {sa_s:>7} {grad_s:>5} {ping_s:>6} {score_s:>6} {status_s:>10}")
 
             time.sleep(SAMPLING_INTERVAL)
 
@@ -522,13 +607,19 @@ def main():
     parser = argparse.ArgumentParser(
         description="Enhanced Presence Detection — UNO Q")
     parser.add_argument("--mode", choices=["baseline", "movement", "analyze",
-                                            "monitor", "quick"],
+                                            "monitor", "quick", "train-ml"],
                         default="quick")
     parser.add_argument("--seconds", type=int, default=30)
     parser.add_argument("--grad-threshold", type=float, default=1.0,
                         help="Soglia gradiente per monitor (default: 1.0)")
     parser.add_argument("--cons-threshold", type=int, default=3,
                         help="Consecutive same-sign per monitor (default: 3)")
+    parser.add_argument("--use-ml", action="store_true",
+                        help="Usa RSSIClassifier (ML) invece di GradientDetector")
+    parser.add_argument("--ml-model", type=str, default=None,
+                        help="Percorso modello ML .joblib (default: rssi_model.joblib)")
+    parser.add_argument("--train-ml", action="store_true",
+                        help="Addestra modello ML dopo la calibrazione")
     args = parser.parse_args()
 
     iface = None
@@ -568,6 +659,25 @@ def main():
         print("\nFase 3/3: Analisi")
         analyze(bl, mv)
 
+        if args.train_ml:
+            print("\nFase extra: Training ML Classifier")
+            train_rssi_ml(bl, mv)
+
+    elif args.mode == "train-ml":
+        import glob
+        bl_files = sorted(glob.glob(os.path.join(REPORT_DIR, "enh_calib_baseline_*.json")))
+        mv_files = sorted(glob.glob(os.path.join(REPORT_DIR, "enh_calib_movement_*.json")))
+        if not bl_files or not mv_files:
+            print("ERRORE: file di calibrazione non trovati. Esegui --mode baseline e --mode movement prima.")
+            return
+        with open(bl_files[-1]) as f:
+            bl_data = json.load(f)
+        with open(mv_files[-1]) as f:
+            mv_data = json.load(f)
+        bl = bl_data.get("samples", bl_data)
+        mv = mv_data.get("samples", mv_data)
+        train_rssi_ml(bl, mv)
+
     elif args.mode == "baseline":
         collect_samples(iface, args.seconds, "baseline")
     elif args.mode == "movement":
@@ -583,7 +693,8 @@ def main():
         with open(mv_files[-1]) as f: mv = json.load(f)["samples"]
         analyze(bl, mv)
     elif args.mode == "monitor":
-        monitor(iface, args.grad_threshold, args.cons_threshold)
+        monitor(iface, args.grad_threshold, args.cons_threshold,
+                use_ml=args.use_ml, ml_model_path=args.ml_model)
 
 
 if __name__ == "__main__":

@@ -177,6 +177,124 @@ RSSI gives one number per packet. CSI gives 64–128 (one per subcarrier). When 
 
 ---
 
+## Pipeline 3 — Machine Learning Classifiers
+
+Both RSSI and CSI pipelines can be **upgraded from threshold-based detectors to Random Forest classifiers**, replacing hand-tuned thresholds with models that learn the specific noise and signal patterns of the deployment environment.
+
+### Why Random Forest
+
+| Requirement | Why Random Forest fits |
+|---|---|
+| Non-linear decision boundary | RSSI noise (±10 dBm on UNO Q) is not linearly separable — a single threshold doesn't cut it |
+| Robust to outliers | Ensemble of 30–50 trees prevents the ±10 dBm spikes from triggering false positives |
+| No feature scaling | RSSI is in dBm, CSI subcarrier amplitudes are in ADC units — RF handles mixed scales natively |
+| Feature importance | Automatically identifies which subcarriers or RSSI features are most indicative of presence |
+| Fast inference | ~0.1 ms per prediction (`O(depth × trees)`) — negligible overhead at 10–100 Hz |
+| Tiny model | 30 trees × depth 5 × 10 features ≈ a few KB on disk |
+
+### RSSIClassifier — Adaptive presence from RSSI
+
+**File:** [`rssi_ml.py`](rssi_ml.py)
+
+Replaces `GradientDetector` with a **Random Forest binary classifier** (EMPTY / PRESENT).
+
+**Features** (extracted from a sliding window of ~20 RSSI samples):
+
+```
+rssi_mean, rssi_std, rssi_min, rssi_max, rssi_range
+gradient_mean, gradient_std, gradient_max_abs
+zero_crossing_rate
+```
+
+**Training:** During calibration (30s baseline + 30s movement at 20 Hz ≈ 1200 labeled samples), the classifier learns to distinguish ambient noise from human-induced signal variation.
+
+**Usage:**
+
+```bash
+# Quick calibration + threshold analysis + ML training
+python3 enhanced_presence.py --mode quick --train-ml
+
+# Or separately: calibrate then train
+python3 enhanced_presence.py --mode baseline --seconds 30
+python3 enhanced_presence.py --mode movement --seconds 30
+python3 enhanced_presence.py --mode train-ml
+
+# Monitor with ML classifier
+python3 enhanced_presence.py --mode monitor --use-ml
+```
+
+### CSIClassifier — Activity recognition from CSI
+
+**File:** [`csi_ml.py`](csi_ml.py)
+
+Replaces `CSIDetector` with a **Random Forest multi-class classifier** (EMPTY / STATIONARY / MOVEMENT).
+
+**Features** (extracted from a window of ~30 CSI frames):
+
+| Group | Features | Count |
+|---|---|---|
+| Per-subcarrier profile | `sub_mean_00..31` + `sub_std_00..31` | 64 |
+| Spectral shape | `variance_across_subcarriers`, `sub_peak_mean/std` | 3 |
+| Temporal variance | `temporal_variance`, `temporal_std_variance` | 2 |
+| Amplitude dynamics | `ampl_mean_min/max/range`, `ampl_std_min/max/range` | 6 |
+| Radio metadata | `rssi_mean/std`, `noise_floor_mean` | 3 |
+| **Total** | | **~88** |
+
+**Classes:**
+
+| Class | What it means | Physical basis |
+|---|---|---|
+| `EMPTY` | No person in the room | Baseline multipath profile |
+| `STATIONARY` | Person sitting/standing still | Micro-Doppler from breathing (±0.1 dB per subcarrier) |
+| `MOVEMENT` | Person walking or gesturing | Large per-subcarrier amplitude fluctuations (±dB) |
+
+**Usage:**
+
+```bash
+# Via UNO Q bridge
+python3 csi_processor.py --calibrate --train-ml --seconds 30
+python3 csi_processor.py --monitor --use-ml
+
+# Via ESP32 USB (Mac/PC standalone)
+python3 csi_mac.py --calibrate --train-ml --seconds 30
+python3 csi_mac.py --monitor --use-ml
+
+# Three-class training (add STATIONARY phase)
+python3 csi_processor.py --calibrate --train-ml --seconds 30 --stationary-seconds 30
+```
+
+### Feature importance analysis
+
+Both classifiers expose `feature_importance` — a ranked list of which features most influence the decision. This is valuable for understanding **which subcarriers** or **which RSSI statistics** carry the most signal, which can inform future hardware or algorithm optimizations.
+
+```bash
+# Show feature importance after training
+python3 rssi_ml.py --load rssi_model.joblib
+python3 csi_ml.py --load csi_model.joblib
+```
+
+### Dependencies
+
+```bash
+# UNO Q (Debian)
+sudo apt install python3-sklearn python3-joblib
+
+# Mac / PC
+pip install scikit-learn joblib
+```
+
+Both `rssi_ml.py` and `csi_ml.py` use **lazy imports** — they load gracefully without sklearn (returning a clear error message) if the dependencies are not installed, so existing users who don't use the ML features are unaffected.
+
+### Files
+
+| File | What it does |
+|---|---|
+| [rssi_ml.py](rssi_ml.py) | RSSIClassifier — Random Forest binary classifier for RSSI presence detection |
+| [csi_ml.py](csi_ml.py) | CSIClassifier — Random Forest multi-class classifier for CSI activity recognition |
+| [test_ml_classifiers.py](test_ml_classifiers.py) | Tests for both classifiers with synthetic data (6 tests, feature extraction + training + inference + persistence) |
+
+---
+
 ## Repository layout
 
 ```
@@ -199,6 +317,9 @@ RSSI gives one number per packet. CSI gives 64–128 (one per subcarrier). When 
 ├── csi_processor.py                    # CSI pipeline (main)
 ├── csi_mac.py                          # CSI without UNO Q (Mac/PC standalone)
 │
+├── rssi_ml.py                          # ML — RSSIClassifier (Random Forest)
+├── csi_ml.py                           # ML — CSIClassifier (Random Forest)
+│
 ├── feasibility_bridge/                 # STM32 sketch: sensors + relay (RSSI pipeline)
 ├── feasibility_test/                   # STM32 sketch: legacy USB-only
 ├── esp32_csi_firmware/                 # ESP32 sketch: CSI capture
@@ -207,6 +328,9 @@ RSSI gives one number per packet. CSI gives 64–128 (one per subcarrier). When 
 │
 ├── test_csi_processor.py               # Python tests
 ├── test_detectors.py
+├── test_ml_classifiers.py              # ML tests (6 tests, synthetic data)
+├── rssi_model.joblib                   # trained RSSI model (generated)
+├── csi_model.joblib                    # trained CSI model (generated)
 └── csi_logs/                           # CSI capture output (gitignored)
 ```
 
@@ -222,6 +346,15 @@ pip install msgpack pyserial
 ```
 
 `iw` is needed by the RSSI pipeline. `msgpack` is needed by anything that talks to `arduino-router` (the bridge). `pyserial` is needed by `csi_mac.py` (host-side standalone CSI).
+
+For the **ML classifiers** (optional — all other features work without it):
+```bash
+# UNO Q (Debian)
+sudo apt install python3-sklearn python3-joblib
+
+# Mac / PC
+pip install scikit-learn joblib
+```
 
 ### Mac / PC (CSI standalone, no UNO Q)
 

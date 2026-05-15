@@ -33,6 +33,17 @@ from collections import deque
 from statistics import mean, stdev
 from math import sqrt, atan2
 
+# CSI ML Classifier: import lazy
+try:
+    from csi_ml import CSIClassifier, CSI_CLASSES, CSI_LABELS, CSI_MODEL_PATH
+    _CSI_ML_AVAILABLE = True
+except ImportError:
+    CSIClassifier = None
+    CSI_CLASSES = {}
+    CSI_LABELS = []
+    CSI_MODEL_PATH = None
+    _CSI_ML_AVAILABLE = False
+
 SOCKET_PATH = "/var/run/arduino-router.sock"
 RPC_TIMEOUT = 5
 POLL_INTERVAL = 0.2  # 200ms = 5 Hz poll lato bridge
@@ -548,16 +559,38 @@ def cmd_ping(client):
         print("  Verifica cablaggio, ESP32, e arduino-router")
 
 
-def cmd_monitor(client):
-    print("CSI Monitor — Ctrl+C per uscire\n")
-    print(f"{'t(s)':>8} {'seq':>6} {'subc':>5} {'ampl_mean':>10} {'ampl_std':>9} {'RSSI':>6}")
-    print("-" * 55)
+def cmd_monitor(client, use_ml: bool = False, ml_model_path: str | None = None):
+    ml_clf = None
+    if use_ml:
+        if not _CSI_ML_AVAILABLE or CSIClassifier is None:
+            print("  [ML] sklearn non installato. Uso modalità raw.")
+            use_ml = False
+        else:
+            assert CSIClassifier is not None
+            ml_clf = CSIClassifier(window_frames=30)
+            model_file = ml_model_path or CSI_MODEL_PATH
+            if model_file and os.path.exists(model_file):
+                ml_clf.load(model_file)
+            else:
+                print(f"  Modello ML non trovato in: {model_file}")
+                print("  Uso modalità raw. Esegui --calibrate --train-ml prima.")
+                use_ml = False
+
+    if use_ml:
+        print("CSI ML Monitor — Ctrl+C per uscire\n")
+        print(f"{'t(s)':>6} {'RSSI':>6} {'EMPTY':>7} {'STILL':>7} {'MOVE':>7} {'Classe':>14}")
+        print("-" * 55)
+    else:
+        print("CSI Monitor — Ctrl+C per uscire\n")
+        print(f"{'t(s)':>8} {'seq':>6} {'subc':>5} {'ampl_mean':>10} {'ampl_std':>9} {'RSSI':>6}")
+        print("-" * 55)
 
     try:
         client.call("csi_clear")
     except Exception:
         pass
 
+    start = time.time()
     try:
         while True:
             try:
@@ -569,13 +602,27 @@ def cmd_monitor(client):
                             continue
                         parsed = parse_csi_line(line)
                         if parsed:
-                            t = parsed.get("_t", 0)
-                            print(f"{t:>8.1f} "
-                                  f"{parsed.get('seq', 0):>6} "
-                                  f"{parsed.get('num_subcarriers', 0):>5} "
-                                  f"{parsed.get('ampl_mean', 0):>10.2f} "
-                                  f"{parsed.get('ampl_std', 0):>9.2f} "
-                                  f"{parsed.get('rssi', 0):>6}")
+                            parsed["_t"] = round(time.time() - start, 3)
+                            t = parsed["_t"]
+
+                            if use_ml:
+                                assert ml_clf is not None
+                                ml_clf.add_frame(parsed)
+                                probas = ml_clf.predict_proba()
+                                cls = ml_clf.predict()
+                                print(f"{t:>6.1f} "
+                                      f"{parsed.get('rssi', 0):>6} "
+                                      f"{probas.get('EMPTY', 0):>7.3f} "
+                                      f"{probas.get('STATIONARY', 0):>7.3f} "
+                                      f"{probas.get('MOVEMENT', 0):>7.3f} "
+                                      f"{cls:>14}")
+                            else:
+                                print(f"{t:>8.1f} "
+                                      f"{parsed.get('seq', 0):>6} "
+                                      f"{parsed.get('num_subcarriers', 0):>5} "
+                                      f"{parsed.get('ampl_mean', 0):>10.2f} "
+                                      f"{parsed.get('ampl_std', 0):>9.2f} "
+                                      f"{parsed.get('rssi', 0):>6}")
             except Exception:
                 pass
             time.sleep(POLL_INTERVAL)
@@ -591,6 +638,65 @@ def cmd_collect(client, seconds, label, out_dir):
         mat_path = os.path.join(out_dir, f"CSI_{label}_{ts}.mat")
         save_benchmark_mat(frames, label, mat_path)
     return frames
+
+
+def cmd_train_csi_ml(client, seconds: int, out_dir: str, stationary_seconds: int = 0):
+    """Raccoglie dati EMPTY + MOVEMENT (opz. STATIONARY) e addestra CSIClassifier."""
+    if not _CSI_ML_AVAILABLE or CSIClassifier is None:
+        print("\n  [ML] sklearn non installato. Installa con:")
+        print("    UNO Q: sudo apt install python3-sklearn python3-joblib")
+        print("    Mac:   pip install scikit-learn joblib")
+        return
+
+    print(f"\n{'='*60}")
+    print(f"  TRAINING CSI ML CLASSIFIER")
+    print(f"{'='*60}")
+
+    # Fase 1: EMPTY
+    input("\nFase 1/3: STANZA VUOTA (allontanati). Premi INVIO...")
+    empty = collect_csi(client, seconds, "baseline", out_dir)
+
+    # Fase 2: STATIONARY (opzionale)
+    stationary = None
+    if stationary_seconds > 0:
+        input(f"\nFase 2/3: SEDUTO FERMO (respiro normale). Premi INVIO...")
+        stationary = collect_csi(client, stationary_seconds, "stationary", out_dir)
+
+    # Fase 3: MOVEMENT
+    n_phase = "3/4" if stationary else "2/3"
+    next_phase = "4/4" if stationary else "3/3"
+    input(f"\nFase {next_phase}: CAMMINA NELLA STANZA. Premi INVIO...")
+    movement = collect_csi(client, seconds, "movement", out_dir)
+
+    print(f"\n  Training CSIClassifier...")
+    print(f"    EMPTY:      {len(empty)} frame")
+    if stationary:
+        print(f"    STATIONARY: {len(stationary)} frame")
+    print(f"    MOVEMENT:   {len(movement)} frame")
+
+    try:
+        clf = CSIClassifier(window_frames=30)
+        metrics = clf.train(empty, stationary, movement)
+        clf.save()
+
+        print(f"\n  Metriche training:")
+        print(f"    Campioni: {metrics['n_train']}")
+        print(f"    Feature:  {metrics['n_features']}")
+        print(f"    Classi:   {metrics['n_classes']}")
+
+        # Salva anche i frame come JSON per rianalisi
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        for label, frames in [("empty", empty), ("stationary", stationary), ("movement", movement)]:
+            if frames:
+                path = os.path.join(out_dir, f"CSI_ML_{label}_{ts}.json")
+                with open(path, "w") as f:
+                    json.dump({"label": label, "frames": frames}, f, indent=2)
+                print(f"    Salvato: {path}")
+
+        return clf
+    except Exception as e:
+        print(f"\n  ERRORE training ML: {e}")
+        return None
 
 
 def cmd_analyze(filepath):
@@ -645,6 +751,14 @@ def main():
     parser.add_argument("--socket", default=SOCKET_PATH, help="Percorso Unix socket router")
     parser.add_argument("--out-dir", default=".",
                         help="Directory output per .mat / .json (default: .)")
+    parser.add_argument("--use-ml", action="store_true",
+                        help="Usa CSIClassifier (ML) in modalità monitor")
+    parser.add_argument("--train-ml", action="store_true",
+                        help="Addestra CSIClassifier dopo la calibrazione")
+    parser.add_argument("--ml-model", type=str, default=None,
+                        help="Percorso modello CSI .joblib (default: csi_model.joblib)")
+    parser.add_argument("--stationary-seconds", type=int, default=0,
+                        help="Secondi per fase STATIONARY (0=salta, default: 0)")
     args = parser.parse_args()
 
     if args.analyze:
@@ -663,7 +777,7 @@ def main():
         if args.ping:
             cmd_ping(client)
         elif args.monitor:
-            cmd_monitor(client)
+            cmd_monitor(client, use_ml=args.use_ml, ml_model_path=args.ml_model)
         elif args.benchmark:
             cmd_collect(client, args.seconds, args.benchmark, args.out_dir)
         elif args.calibrate:
@@ -671,6 +785,26 @@ def main():
             input("\nPremi INVIO per iniziare la fase MOVEMENT...")
             movement = cmd_collect(client, args.seconds, "movement", args.out_dir)
             analyze_frames(baseline, movement)
+
+            if args.train_ml:
+                print("\nTraining ML Classifier sui dati raccolti...")
+                if not _CSI_ML_AVAILABLE or CSIClassifier is None:
+                    print("  sklearn non installato. pip install scikit-learn joblib")
+                else:
+                    assert CSIClassifier is not None
+                    stationary = None
+                    if args.stationary_seconds > 0:
+                        input(f"\nFase STATIONARY: siediti fermo. Premi INVIO...")
+                        stationary = cmd_collect(client, args.stationary_seconds, "stationary", args.out_dir)
+                    try:
+                        clf = CSIClassifier(window_frames=30)
+                        clf.train(baseline, stationary, movement)
+                        save_path = args.ml_model or CSI_MODEL_PATH or "csi_model.joblib"
+                        clf.save(save_path)
+                    except Exception as e:
+                        print(f"ERRORE training ML: {e}")
+        elif args.train_ml:
+            cmd_train_csi_ml(client, args.seconds, args.out_dir, args.stationary_seconds)
         else:
             parser.print_help()
     finally:
