@@ -219,8 +219,8 @@ python3 enhanced_presence.py --mode baseline --seconds 30
 python3 enhanced_presence.py --mode movement --seconds 30
 python3 enhanced_presence.py --mode train-ml
 
-# Monitor with ML classifier
-python3 enhanced_presence.py --mode monitor --use-ml
+# Monitor with ML classifier (soglia probabilità 0.4)
+python3 enhanced_presence.py --mode monitor --use-ml --ml-threshold 0.4
 ```
 
 ### CSIClassifier — Activity recognition from CSI

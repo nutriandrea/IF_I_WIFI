@@ -525,7 +525,8 @@ def train_rssi_ml(baseline: list, movement: list, save: bool = True) -> RSSIClas
 # Monitor real-time
 # ============================================================
 def monitor(iface: str, grad_th: float = 1.0, cons_th: int = 3,
-            use_ml: bool = False, ml_model_path: str | None = None):
+            use_ml: bool = False, ml_model_path: str | None = None,
+            ml_threshold: float = 0.5):
     """Monitoraggio real-time. Usa GradientDetector o RSSIClassifier in base a use_ml."""
     gw = detect_gateway()
 
@@ -579,7 +580,7 @@ def monitor(iface: str, grad_th: float = 1.0, cons_th: int = 3,
                     ml_clf.add_sample(float(rssi))
                 if ml_clf.ready:
                     prob = ml_clf.predict_proba()
-                    presence = prob >= 0.5
+                    presence = prob >= ml_threshold
                     status_s = "PRESENTE!" if presence else "vuoto"
                     rssi_s = str(metrics.get("rssi", "-")) if metrics.get("rssi") is not None else "-"
                     sa_s = str(metrics.get("signal_avg", "-"))
@@ -619,7 +620,9 @@ def main():
     parser.add_argument("--ml-model", type=str, default=None,
                         help="Percorso modello ML .joblib (default: rssi_model.joblib)")
     parser.add_argument("--train-ml", action="store_true",
-                        help="Addestra modello ML dopo la calibrazione")
+                        help="Addestra modello ML dopo calibrazione")
+    parser.add_argument("--ml-threshold", type=float, default=0.5,
+                        help="Soglia di probabilità ML [0-1] (default: 0.5)")
     args = parser.parse_args()
 
     iface = None
@@ -694,7 +697,8 @@ def main():
         analyze(bl, mv)
     elif args.mode == "monitor":
         monitor(iface, args.grad_threshold, args.cons_threshold,
-                use_ml=args.use_ml, ml_model_path=args.ml_model)
+                use_ml=args.use_ml, ml_model_path=args.ml_model,
+                ml_threshold=args.ml_threshold)
 
 
 if __name__ == "__main__":
