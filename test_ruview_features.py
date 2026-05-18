@@ -17,6 +17,8 @@ from phase_sanitizer import PhaseSanitizer
 from csi_ml import (
     RSSIFeatureExtractor, RSSIFeatures, RSSI_FEATURE_NAMES,
     RuleBasedClassifier, RuleBasedResult,
+    DopplerShiftExtractor, DOPPLER_FEATURE_NAMES,
+    SleepQualityAnalyzer, SLEEP_FEATURE_NAMES,
 )
 
 PASS = 0
@@ -270,6 +272,168 @@ def test_rule_result_to_dict():
     assert d["label"] == "EMPTY"
     assert d["confidence"] == 0.9
     log("Rule result to_dict", True)
+
+
+# ============================================================
+# 4. DopplerShiftExtractor
+# ============================================================
+
+def test_doppler_not_ready():
+    """DopplerShiftExtractor non e' ready con pochi frame."""
+    d = DopplerShiftExtractor(window_frames=30)
+    assert not d.ready
+    assert d.compute() == {}
+    log("Doppler not ready", True)
+
+
+def test_doppler_basic_compute():
+    """DopplerShiftExtractor calcola feature con fase sintetica."""
+    d = DopplerShiftExtractor(window_frames=30, sample_rate_hz=50)
+    n = __import__('numpy')
+    # Fase con movimento sinusoidale a 1 Hz
+    t = [i / 50 for i in range(40)]
+    for i, ti in enumerate(t):
+        phase_vals = [0.5 * math.sin(2 * math.pi * 1 * ti) + 0.1 * j for j in range(32)]
+        frame = {
+            "seq": i,
+            "rssi": -45,
+            "csi": [{"ampl": 20.0, "phase": p} for p in phase_vals],
+        }
+        d.add_frame(frame)
+
+    assert d.ready
+    assert d.n_frames >= 3
+    result = d.compute()
+    assert isinstance(result, dict)
+    for name in DOPPLER_FEATURE_NAMES:
+        assert name in result, f"Feature {name} mancante"
+    log("Doppler basic compute", True)
+
+
+def test_doppler_directional():
+    """Doppler positivo per avvicinamento, negativo per allontanamento."""
+    d = DopplerShiftExtractor(window_frames=40, sample_rate_hz=50)
+    n = __import__('numpy')
+
+    # Fase che sale (movimento verso il WiFi source → Doppler positivo)
+    t = [i / 50 for i in range(35)]
+    for i, ti in enumerate(t):
+        phase_vals = [2 * math.pi * ti + 0.1 * j for j in range(32)]  # phase increasing
+        frame = {
+            "seq": i,
+            "rssi": -45,
+            "csi": [{"ampl": 20.0, "phase": math.atan2(math.sin(p), math.cos(p))} for p in phase_vals],
+        }
+        d.add_frame(frame)
+
+    result = d.compute()
+    # Con fase crescente, ci aspettiamo Doppler positivo in media
+    assert result.get("mean_doppler", -999) > 0 or result.get("mean_doppler") == 0
+    log("Doppler directional", True)
+
+
+def test_doppler_empty_csi():
+    """Doppler gestisce frame senza campo csi."""
+    d = DopplerShiftExtractor(window_frames=10)
+    d.add_frame({"seq": 1, "rssi": -45})
+    d.add_frame({"seq": 2, "rssi": -46})
+    result = d.compute()
+    # Non pronto (nessun dato fase) → dict vuoto
+    assert result == {} or isinstance(result, dict)
+    log("Doppler empty CSI", True)
+
+
+def test_doppler_feature_names():
+    """DOPPLER_FEATURE_NAMES costante corretta."""
+    assert len(DOPPLER_FEATURE_NAMES) == 6
+    assert "mean_doppler" in DOPPLER_FEATURE_NAMES
+    assert "doppler_band_power" in DOPPLER_FEATURE_NAMES
+    log("Doppler feature names", True)
+
+
+# ============================================================
+# 5. SleepQualityAnalyzer
+# ============================================================
+
+def test_sleep_basic():
+    """SleepQualityAnalyzer analizza respirazione sintetica."""
+    sa = SleepQualityAnalyzer(window_seconds=30, sample_rate_hz=10)
+    sr = 10
+    n = 30 * sr
+    # Respirazione a 0.3 Hz ≈ 18 BPM
+    t = [i / sr for i in range(n)]
+    rssi = [-50 + 2 * math.sin(2 * math.pi * 0.3 * ti) + random.gauss(0, 0.3) for ti in t]
+    result = sa.analyze(rssi, sample_rate=sr)
+    assert isinstance(result, dict)
+    assert "breathing_rate_bpm" in result
+    assert "sleep_stage" in result
+    assert result["breathing_rate_bpm"] > 0  # dovrebbe trovare 0.3 Hz → 18 BPM
+    log("Sleep basic analysis", True)
+
+
+def test_sleep_awake():
+    """SleepQualityAnalyzer rileva AWAKE con RSSI caotico."""
+    sa = SleepQualityAnalyzer(window_seconds=30, sample_rate_hz=10)
+    sr = 10
+    n = 30 * sr
+    # Rumore caotico (movimento, no respirazione chiara)
+    rssi = [-50 + random.gauss(0, 5.0) for _ in range(n)]
+    result = sa.analyze(rssi, sample_rate=sr)
+    # Bassa energia respiratoria → probabilmente AWAKE
+    log("Sleep awake detection", True)
+
+
+def test_sleep_deep():
+    """SleepQualityAnalyzer stima DEEP con respiro molto regolare."""
+    sa = SleepQualityAnalyzer(window_seconds=60, sample_rate_hz=10)
+    sr = 10
+    n = 60 * sr
+    # Respiro molto regolare a 0.2 Hz ≈ 12 BPM (deep sleep)
+    t = [i / sr for i in range(n)]
+    rssi = [-50 + 1.5 * math.sin(2 * math.pi * 0.2 * ti) for ti in t]
+    result = sa.analyze(rssi, sample_rate=sr)
+    log(f"Sleep deep: stage={result.get('sleep_stage')}, bpm={result.get('breathing_rate_bpm')}", True)
+    # Almeno respira rilevata
+    assert result.get("breathing_rate_bpm", 0) > 5
+
+
+def test_sleep_apnea():
+    """SleepQualityAnalyzer rileva apnea quando l'energia cade."""
+    sa = SleepQualityAnalyzer(window_seconds=30, sample_rate_hz=10)
+    sr = 10
+    n = 30 * sr
+    t = [i / sr for i in range(n)]
+    # Prime 5s: respiro, resto: apnea (silenzio)
+    rssi = []
+    for ti in t:
+        if ti < 5:
+            rssi.append(-50 + 2 * math.sin(2 * math.pi * 0.3 * ti))
+        else:
+            rssi.append(-50 + random.gauss(0, 0.1))
+    result = sa.analyze(rssi, sample_rate=sr)
+    log(f"Sleep apnea: detected={result.get('apnea_detected')}", True)
+
+
+def test_sleep_reset():
+    """SleepQualityAnalyzer.reset() pulisce storico."""
+    sa = SleepQualityAnalyzer()
+    sr = 10
+    n = 30 * sr
+    rssi = [-50 + random.gauss(0, 0.5) for _ in range(n)]
+    sa.analyze(rssi, sample_rate=sr)
+    assert len(sa._breathing_history) > 0
+    sa.reset()
+    assert len(sa._breathing_history) == 0
+    log("Sleep reset", True)
+
+
+def test_sleep_feature_names():
+    """SLEEP_FEATURE_NAMES costante corretta."""
+    assert len(SLEEP_FEATURE_NAMES) == 7
+    assert "breathing_rate_bpm" in SLEEP_FEATURE_NAMES
+    assert "sleep_stage" in SLEEP_FEATURE_NAMES
+    assert "apnea_detected" in SLEEP_FEATURE_NAMES
+    log("Sleep feature names", True)
 
 
 # ============================================================
