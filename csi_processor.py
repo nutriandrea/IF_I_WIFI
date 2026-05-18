@@ -114,6 +114,11 @@ _RE_CSI = re.compile(
     r"CSI:(\d+):(-?\d+):(-?\d+):(\d+):(\d+):(\d+):([\d,\-]*)"
 )
 
+# Multi-AP context (AP:<id> lines from firmware)
+_RE_AP = re.compile(r"AP:(\d+)")
+_RE_AP_SWITCH = re.compile(r"AP_SWITCH:(\d+)")
+_AP_CONTEXT = 0
+
 # Vecchio formato ESP32-CSI-Toolkit (compatibilità)
 _CSI_FIELDS = [
     "type", "role", "mac", "rssi", "rate", "sig_mode", "mcs",
@@ -130,6 +135,19 @@ def parse_csi_line(line: str) -> dict | None:
     line = line.strip()
     if not line:
         return None
+
+    global _AP_CONTEXT
+
+    # AP context line (multi-AP mode)
+    m_ap = _RE_AP.match(line)
+    if m_ap:
+        _AP_CONTEXT = int(m_ap.group(1))
+        return {"ap_context": _AP_CONTEXT, "type": "ap_context"}
+
+    # AP switch notification
+    m_switch = _RE_AP_SWITCH.match(line)
+    if m_switch:
+        return {"ap_switch": int(m_switch.group(1)), "type": "ap_switch"}
 
     # --- Nuovo formato firmaware ESP32 ---
     m = _RE_CSI.match(line)
@@ -168,6 +186,7 @@ def parse_csi_line(line: str) -> dict | None:
                 "bandwidth": bw,
                 "num_subcarriers": len(csi_data),
                 "csi": csi_data,
+                "ap_id": _AP_CONTEXT,
             }
 
             if csi_data:
@@ -242,6 +261,7 @@ def parse_csi_line(line: str) -> dict | None:
             result["ampl_max"] = round(max(amps), 3)
             result["ampl_min"] = round(min(amps), 3)
 
+        result["ap_id"] = _AP_CONTEXT
         return result
 
     except Exception:

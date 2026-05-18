@@ -12,12 +12,15 @@ Modalita':
   --monitor             Real-time presence detection con CSIDetector
   --capture N           Salva N secondi su file (csi_capture_*.txt)
   --calibrate           Baseline 30s + movement 30s + analisi soglie
+  --num-aps N           Modalita multi-AP (channel hopping tra N hotspot).
+                        Con --use-ml usa MultiAPCSIClassifier.
 
 Esempi:
     python3 csi_mac.py --monitor
     python3 csi_mac.py --capture 60
     python3 csi_mac.py --calibrate --seconds 30
     python3 csi_mac.py --port /dev/cu.usbserial-1140 --monitor
+    python3 csi_mac.py --monitor --use-ml --num-aps 3   # multi-AP + ML
 
 Dipendenze: pip install pyserial
 """
@@ -45,10 +48,11 @@ from csi_processor import parse_csi_line, CSIDetector
 
 # CSI ML Classifier: import lazy
 try:
-    from csi_ml import CSIClassifier, CSI_CLASSES, CSI_LABELS, CSI_MODEL_PATH
+    from csi_ml import CSIClassifier, MultiAPCSIClassifier, CSI_CLASSES, CSI_LABELS, CSI_MODEL_PATH
     _CSI_ML_AVAILABLE = True
 except ImportError:
     CSIClassifier = None
+    MultiAPCSIClassifier = None
     CSI_CLASSES = {}
     CSI_LABELS = []
     CSI_MODEL_PATH = None
@@ -111,7 +115,10 @@ def cmd_monitor(args) -> int:
             use_ml = False
         else:
             assert CSIClassifier is not None
-            ml_clf = CSIClassifier(window_frames=30)
+            if args.num_aps > 1:
+                ml_clf = MultiAPCSIClassifier(window_frames=30, num_aps=args.num_aps)
+            else:
+                ml_clf = CSIClassifier(window_frames=30)
             model_file = args.ml_model or CSI_MODEL_PATH
             if model_file and os.path.exists(model_file):
                 ml_clf.load(model_file)
@@ -363,7 +370,10 @@ def cmd_calibrate(args) -> int:
         else:
             assert CSIClassifier is not None
             try:
-                clf = CSIClassifier(window_frames=30)
+                if args.num_aps > 1:
+                    clf = MultiAPCSIClassifier(window_frames=30, num_aps=args.num_aps)
+                else:
+                    clf = CSIClassifier(window_frames=30)
                 metrics = clf.train(baseline, stationary, movement)
                 save_path = args.ml_model or CSI_MODEL_PATH or "csi_model.joblib"
                 clf.save(save_path)
@@ -421,6 +431,8 @@ def main() -> int:
                     help="Percorso modello .joblib (default: csi_model.joblib)")
     ap.add_argument("--stationary-seconds", type=int, default=0,
                     help="Secondi per fase STATIONARY (0=salta, default: 0)")
+    ap.add_argument("--num-aps", type=int, default=1,
+                    help="Numero AP in channel hopping (1=mono-AP, 3=multi-AP). Default 1.")
     args = ap.parse_args()
 
     if args.monitor:

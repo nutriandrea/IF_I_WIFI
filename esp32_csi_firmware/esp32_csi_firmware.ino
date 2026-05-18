@@ -35,6 +35,28 @@
 // ============================================================
 #include "secrets.h"
 
+// Supporto multi-AP: se NUM_APS > 1, il firmware cicla tra AP_LIST
+#ifndef NUM_APS
+#define NUM_APS 1
+#endif
+
+#ifndef AP_CAPTURE_SECONDS
+#define AP_CAPTURE_SECONDS 3
+#endif
+
+#ifndef AP_LIST
+#define AP_LIST {{WIFI_SSID, WIFI_PASS}}
+#endif
+
+typedef struct {
+    const char* ssid;
+    const char* pass;
+} ap_cred_t;
+
+static const ap_cred_t AP_CREDS[NUM_APS] = AP_LIST;
+static int current_ap = 0;
+static unsigned long ap_stream_start = 0;
+
 // ============================================================
 // Config tecnica
 // ============================================================
@@ -214,7 +236,7 @@ void setup() {
     // Riduce la potenza TX per stare nei limiti USB (8.5dBm ≈ 7mW).
     // Range tipico in casa: ancora sufficiente per stare connessi all'AP.
     WiFi.setTxPower(WIFI_POWER_8_5dBm);
-    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    WiFi.begin(AP_CREDS[current_ap].ssid, AP_CREDS[current_ap].pass);
 }
 
 void loop() {
@@ -247,6 +269,12 @@ void loop() {
                 Serial.print("WiFi:OK,");
                 Serial.println(WiFi.localIP());
                 digitalWrite(LED_PIN, HIGH);
+                ap_stream_start = millis();
+
+                if (NUM_APS > 1) {
+                    Serial.print("AP:");
+                    Serial.println(current_ap);
+                }
 
                 if (setup_csi()) {
                     Serial.println("CSI:enabled");
@@ -262,6 +290,24 @@ void loop() {
     // Output CSI solo quando inizializzato
     if (csi_initialized) {
         output_frames();
+
+        // Multi-AP: switch al prossimo AP dopo AP_CAPTURE_SECONDS
+        if (NUM_APS > 1) {
+            unsigned long elapsed = millis() - ap_stream_start;
+            if (elapsed >= (AP_CAPTURE_SECONDS * 1000UL)) {
+                esp_wifi_set_csi(&csi_config, false);  // disable CSI
+                WiFi.disconnect(true);
+                csi_initialized = false;
+
+                current_ap = (current_ap + 1) % NUM_APS;
+
+                Serial.print("AP_SWITCH:");
+                Serial.println(current_ap);
+
+                last_wifi_check = 0;  // forza riconnessione immediata
+                digitalWrite(LED_PIN, LOW);
+            }
+        }
     }
 
     delay(1);
