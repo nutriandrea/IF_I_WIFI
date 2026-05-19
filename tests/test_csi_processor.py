@@ -5,7 +5,7 @@ Self-contained: nessuna importazione da file di calibrazione.
 """
 import sys, os, json, math, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from csi_processor import parse_csi_line, CSIDetector
+from csi.csi_processor import parse_csi_line, CSIDetector
 
 
 # ============================================================

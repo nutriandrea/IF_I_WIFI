@@ -12,8 +12,8 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from csi_processor import parse_csi_line
-from csi_ml import (
+from csi.csi_processor import parse_csi_line
+from csi.csi_ml import (
     MultiAPCSIClassifier,
     CSI_LABELS,
     CSI_FEATURE_SIZE,
@@ -116,7 +116,7 @@ def test_parser_csi_with_ap_id():
     assert parse_csi_line("HB:1s wifi=3") is None
 
     # Valori di default
-    from csi_processor import _AP_CONTEXT
+    from csi.csi_processor import _AP_CONTEXT
     original = _AP_CONTEXT
     # Dopo AP:0, ap_id=0
     parse_csi_line("AP:0")

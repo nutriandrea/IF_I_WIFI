@@ -13,7 +13,7 @@ Feature ingegnerizzate da finestra mobile di RSSI:
   - zero_crossing_rate
 
 Uso:
-  from rssi_ml import RSSIClassifier
+  from rssi.rssi_ml import RSSIClassifier
 
   clf = RSSIClassifier(window_size=20)
   # Training

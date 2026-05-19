@@ -15,16 +15,17 @@ import random
 import json
 import tempfile
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from rssi_ml import (
+from rssi.rssi_ml import (
     RSSIClassifier,
     extract_rssi_features,
     rssi_window_to_vector,
     FEATURE_NAMES,
     NUM_FEATURES,
 )
-from csi_ml import (
+
+from csi.csi_ml import (
     CSIClassifier,
     extract_csi_profile,
     csi_window_to_vector,

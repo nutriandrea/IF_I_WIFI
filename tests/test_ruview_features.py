@@ -11,10 +11,10 @@ import os
 import math
 import random
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from phase_sanitizer import PhaseSanitizer
-from csi_ml import (
+from csi.phase_sanitizer import PhaseSanitizer
+from csi.csi_ml import (
     RSSIFeatureExtractor, RSSIFeatures, RSSI_FEATURE_NAMES,
     RuleBasedClassifier, RuleBasedResult,
     DopplerShiftExtractor, DOPPLER_FEATURE_NAMES,

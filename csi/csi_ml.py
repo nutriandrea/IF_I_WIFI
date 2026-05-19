@@ -13,7 +13,7 @@ Feature da finestra di frame CSI:
   - RSSI mean/std, noise_floor mean
 
 Uso:
-  from csi_ml import CSIClassifier, CSI_CLASSES, CSI_LABELS
+  from csi.csi_ml import CSIClassifier, CSI_CLASSES, CSI_LABELS
 
   clf = CSIClassifier(window_frames=30)
   clf.train(empty_frames, stationary_frames, movement_frames)
@@ -1144,7 +1144,7 @@ class DopplerShiftExtractor:
         if phase_sanitizer is not None:
             self._phase_sanitizer = phase_sanitizer
         else:
-            from phase_sanitizer import PhaseSanitizer
+            from .phase_sanitizer import PhaseSanitizer
             self._phase_sanitizer = PhaseSanitizer()
 
     def add_frame(self, frame: dict):

@@ -33,7 +33,7 @@ from statistics import mean, stdev
 
 # ML Classifier: import lazy per non rompere senza sklearn
 try:
-    from rssi_ml import RSSIClassifier, RSSI_MODEL_PATH
+    from .rssi_ml import RSSIClassifier, RSSI_MODEL_PATH
     _RSSI_ML_AVAILABLE = True
 except ImportError:
     RSSIClassifier = None

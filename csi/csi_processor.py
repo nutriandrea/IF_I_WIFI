@@ -35,7 +35,7 @@ from math import sqrt, atan2
 
 # CSI ML Classifier: import lazy
 try:
-    from csi_ml import CSIClassifier, CSI_CLASSES, CSI_LABELS, CSI_MODEL_PATH
+    from .csi_ml import CSIClassifier, CSI_CLASSES, CSI_LABELS, CSI_MODEL_PATH
     _CSI_ML_AVAILABLE = True
 except ImportError:
     CSIClassifier = None
