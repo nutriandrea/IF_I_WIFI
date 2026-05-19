@@ -22,3 +22,7 @@ csi_logs/
 *.csi.csv
 calib_*.json
 enh_calib_*.json
+
+# MACOS FILES
+.DS_Store   
+
