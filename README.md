@@ -62,16 +62,16 @@ Detects presence and motion from the WiFi signal strength of `wlan0` (the UNO Q'
 
 ### Files
 
-| File | What it does |
+All in [`rssi/`](rssi/):
+| File | Description |
 |---|---|
-| [enhanced_presence.py](enhanced_presence.py) | Main detector. Modes: `quick` / `baseline` / `movement` / `analyze` / `monitor` |
-| [calibrate_presence.py](calibrate_presence.py) | Legacy calibration (std + adaptive delta strategies) |
-| [monitor_presence.py](monitor_presence.py) | Monitor-mode capture (requires root, optional) |
-| [decision_engine.py](decision_engine.py) | Orchestrator: RSSI → score → STM32 relay/LED action via bridge RPC |
-| [feasibility_test.py](feasibility_test.py) | End-to-end smoke test (RSSI, features, system load, bridge, combined pipeline) |
-| [feasibility_bridge/](feasibility_bridge/) | STM32 sketch — exposes `ping`, `get_sensors`, `set_relay`, `set_led` RPCs |
-| [feasibility_test/](feasibility_test/) | Legacy STM32 sketch (USB-CDC only, no router bridge) |
-| [bridge_client.py](bridge_client.py) | CLI wrapper for arduino-router RPC (useful for ad-hoc calls) |
+| [`enhanced_presence.py`](rssi/enhanced_presence.py) | Main detector. Modes: `quick` / `baseline` / `movement` / `analyze` / `monitor` |
+| [`calibrate_presence.py`](rssi/calibrate_presence.py) | Legacy calibration (std + adaptive delta strategies) |
+| [`monitor_presence.py`](rssi/monitor_presence.py) | Monitor-mode capture (requires root, optional) |
+| [`decision_engine.py`](rssi/decision_engine.py) | Orchestrator: RSSI → score → STM32 relay/LED action via bridge RPC |
+| [`rssi_ml.py`](rssi/rssi_ml.py) | RSSI ML classifier (Random Forest) |
+| [`bridge_client.py`](rssi/bridge_client.py) | CLI wrapper for arduino-router RPC |
+| [`firmware/feasibility_bridge/`](firmware/feasibility_bridge/) | STM32 sketch — exposes `ping`, `get_sensors`, `set_relay`, `set_led` RPCs |
 
 ### Quick start
 
@@ -82,16 +82,16 @@ git pull
 sudo apt-get install -y iw
 
 # Quick calibration (30s baseline + 30s movement + analysis)
-python3 enhanced_presence.py --mode quick
+python3 -m rssi.enhanced_presence --mode quick
 
 # Live monitoring with calibrated thresholds
-python3 enhanced_presence.py --mode monitor
+python3 -m rssi.enhanced_presence --mode monitor
 
 # Full orchestrator (RSSI + sensor RPCs + relay/LED)
-python3 decision_engine.py
+python3 -m rssi.decision_engine
 ```
 
-For the STM32 side (sensors + relay): upload [feasibility_bridge/feasibility_bridge.ino](feasibility_bridge/feasibility_bridge.ino) via Arduino IDE (Board: "Arduino UNO Q (STM32)").
+For the STM32 side (sensors + relay): upload [firmware/feasibility_bridge/feasibility_bridge.ino](firmware/feasibility_bridge/feasibility_bridge.ino) via Arduino IDE (Board: "Arduino UNO Q (STM32)").
 
 ### Known limit
 
@@ -121,15 +121,79 @@ The ESP32 connects to a 2.4 GHz AP (your home WiFi), captures CSI from every rec
 
 ### Files
 
-| File | What it does |
+All in [`csi/`](csi/):
+| File | Description |
 |---|---|
-| [csi_processor.py](csi_processor.py) | Main CSI pipeline on Linux. Modes: `--ping` / `--monitor` / `--calibrate` / `--benchmark` / `--analyze`. Includes `parse_csi_line` and `CSIDetector` classes |
-| [csi_mac.py](csi_mac.py) | Standalone: read CSI directly from ESP32's USB on a Mac/PC. Bypasses UNO Q entirely. Useful for testing CSI without the UART bridge |
-| [esp32_csi_firmware/](esp32_csi_firmware/) | ESP32 sketch — captures CSI and streams CSV |
-| [esp32_csi_bridge/](esp32_csi_bridge/) | STM32 sketch — buffers ESP32 frames and exposes `csi_ping`, `csi_count`, `csi_read_all`, `csi_clear` RPCs |
-| [test_esp32_uart/](test_esp32_uart/) | STM32 sketch to verify the UART link to ESP32 |
+| [`csi_processor.py`](csi/csi_processor.py) | Main CSI pipeline. Modes: `--ping` / `--monitor` / `--calibrate` / `--benchmark` / `--analyze`. Includes `parse_csi_line` and `CSIDetector` classes |
+| [`csi_mac.py`](csi/csi_mac.py) | Standalone: read CSI directly from ESP32's USB or BLE on a Mac/PC. Bypasses UNO Q entirely. `--ble` per Bluetooth Low Energy |
+| [`csi_ble.py`](csi/csi_ble.py) | BLE reader module: `BleReader` class + `ble_reader()` callback. Dipendenza: `bleak` |
+| [`csi_ml.py`](csi/csi_ml.py) | CSI ML classifier + RSSIFeatureExtractor, RuleBasedClassifier, DopplerShiftExtractor, SleepQualityAnalyzer |
+| [`csi_plot.py`](csi/csi_plot.py) | **Live real-time visualization**: `waterfall` (spectrogram), `time` (time-series), `bar` (bar chart) |
+| [`csi_record.py`](csi/csi_record.py) | **Recording and replay** — record from serial (auto-rotate), replay to stdout/pipe/WebSocket |
+| [`csi/seat_mapper.py`](csi/seat_mapper.py) | **Classroom demo**: fingerprint per sedia → RandomForest → live prediction + WebSocket |
+| [`phase_sanitizer.py`](csi/phase_sanitizer.py) | Phase sanitization (unwrap → outlier removal → smoothing) |
 
-### Wiring (ESP32 → UNO Q)
+Firmware in [`firmware/`](firmware/):
+| File | Description |
+|---|---|
+| [`firmware/esp32_csi_firmware/`](firmware/esp32_csi_firmware/) | ESP32 sketch — captures CSI and streams CSV via UART (wired) |
+| [`firmware/esp32_csi_bt/`](firmware/esp32_csi_bt/) | ESP32 sketch — captures CSI via Bluetooth SPP (wireless) |
+| [`firmware/esp32_csi_bridge/`](firmware/esp32_csi_bridge/) | STM32 sketch — buffers ESP32 frames, exposes RPCs |
+
+### Wireless: ESP32 via Bluetooth Low Energy (nessun cavo)
+
+Il firmware [`esp32_csi_bt`](firmware/esp32_csi_bt/) usa **Bluetooth Low Energy (BLE)** — più moderno, più efficiente, e compatibile con UNO Q (che non ha Classic Bluetooth).
+
+**Nessun cablaggio:** basta alimentazione USB (power bank). L'ESP32 cattura CSI via WiFi e la streamma via BLE usando il **Nordic UART Service (NUS)**.
+
+```
+   ESP32                          Mac / UNO Q Linux
+┌──────────────┐     BLE NUS     ┌──────────────────┐
+│ CSI capture  │────────────────▶│ python (bleak)    │
+│ + BLE NUS TX │ 6E400003-...   │ iter_lines()      │
+└──────────────┘                 └──────────────────┘
+```
+
+#### Firmware BLE
+
+Il firmware si trova in [`firmware/esp32_csi_bt/esp32_csi_ble.ino`](firmware/esp32_csi_bt/esp32_csi_ble.ino):
+
+| Parametro | Valore |
+|---|---|
+| Nome dispositivo | `ESP32_CSI` |
+| UUID servizio | `6E400001-B5A3-F393-E0A9-E50E24DCCA9F` (Nordic UART Service) |
+| TX (ESP32 → host) | `6E400003-B5A3-F393-E0A9-E50E24DCCA9F` (notify) |
+| RX (host → ESP32) | `6E400002-B5A3-F393-E0A9-E50E24DCCA9F` (write) |
+| CSI baud (WiFi → BLE) | interna, nessuna porta seriale necessaria |
+
+#### Modulo Python `csi_ble.py`
+
+[`csi/csi_ble.py`](csi/csi_ble.py) implementa `BleReader` (classe) e `ble_reader()` (funzione callback-based) usando **bleak** (cross-platform BLE). L'iteratore `iter_lines()` produce linee CSI complete in formato identico a quello seriale, rendendo il resto della pipeline trasparente.
+
+#### `--ble` flag
+
+Tutti i tool supportano `--ble` per passare da seriale a BLE senza cambiare codice:
+
+```bash
+# CSI monitor via BLE
+python3 -m csi.csi_mac --ble --monitor
+
+# Calibrate via BLE
+python3 -m csi.csi_mac --ble --calibrate
+
+# Recording via BLE
+python3 -m csi.csi_record --record --ble
+
+# Seat mapper training via BLE
+python3 -m csi.seat_mapper --mode train --ble --num-seats 10
+
+# Seat mapper live via BLE
+python3 -m csi.seat_mapper --mode live --ble
+```
+
+**Dipendenze:** `pip install bleak` (necessario su Mac e su UNO Q Linux MPU).
+
+### Wiring (ESP32 → UNO Q, via UART cablata)
 
 ```
 ESP32 GND  →  UNO Q GND          (mandatory)
@@ -143,32 +207,42 @@ Baud rate: 921600 (or 115200 if you flashed the diagnostic build)
 
 **On a host computer (Mac/PC):**
 ```bash
-cd esp32_csi_firmware
+cd firmware/esp32_csi_firmware
 cp secrets.h.example secrets.h    # then edit SSID/PASS, AP must be 2.4 GHz!
 ```
 
-Open `esp32_csi_firmware.ino` in Arduino IDE. Board: **ESP32 Dev Module**. Upload Speed: **115200** (more reliable than 921600 with cheap USB-Serial chips). Upload to ESP32 via USB. Watch the Serial Monitor at the firmware's baud rate (currently 115200 in the diagnostic build) for `ESP32_CSI_READY` → `WiFi:connecting...` → `WiFi:OK,<ip>` → `CSI:enabled`.
+Open `firmware/esp32_csi_firmware/esp32_csi_firmware.ino` in Arduino IDE. Board: **ESP32 Dev Module**. Upload Speed: **115200** (more reliable than 921600 with cheap USB-Serial chips). Upload to ESP32 via USB. Watch the Serial Monitor at the firmware's baud rate (currently 115200 in the diagnostic build) for `ESP32_CSI_READY` → `WiFi:connecting...` → `WiFi:OK,<ip>` → `CSI:enabled`.
 
 **On the UNO Q (full pipeline through the STM32 bridge):**
 ```bash
-# 1. Upload esp32_csi_bridge.ino to the STM32 via Arduino IDE
+# 1. Upload firmware/esp32_csi_bridge/esp32_csi_bridge.ino to the STM32 via Arduino IDE
 #    (Board: "Arduino UNO Q (STM32)")
 # 2. Wire ESP32 to D0/D1 as above
 # 3. Power-cycle / reset both
 
-cd ~/ArduinoApps/ArduinoWifiSensing
+cd ~/ArduinoWifiSensing
 git pull
 pip install msgpack
-python3 csi_processor.py --ping       # → ESP32: pong:OK
-python3 csi_processor.py --monitor    # live presence detection
+python3 -m csi.csi_processor --ping       # → ESP32: pong:OK
+python3 -m csi.csi_processor --monitor    # live presence detection
 ```
 
 **On a Mac (CSI without UNO Q, ESP32 only):**
 ```bash
 pip install pyserial
-python3 csi_mac.py --monitor          # autodetects /dev/cu.usbserial-*
-python3 csi_mac.py --capture --seconds 60 --label test1
-python3 csi_mac.py --calibrate --seconds 30
+python3 -m csi.csi_mac --monitor          # autodetects /dev/cu.usbserial-*
+python3 -m csi.csi_mac --capture --seconds 60 --label test1
+python3 -m csi.csi_mac --calibrate --seconds 30
+```
+
+**Analisi e replay:**
+```bash
+python3 -m csi.csi_plot --mode waterfall     # live waterfall (con ESP32)
+python3 -m csi.csi_plot --mode bar           # bar chart per subcarrier
+python3 -m csi.csi_record --record           # registra su file (seriale)
+python3 -m csi.csi_record --record --ble     # registra su file (BLE)
+python3 -m csi.csi_record --info csi_captures/csi_capture_*.txt
+python3 -m csi.csi_record --replay capture.txt | python3 -m csi.csi_mac --stdin
 ```
 
 ### Why CSI matters
@@ -212,16 +286,29 @@ zero_crossing_rate
 
 ```bash
 # Quick calibration + threshold analysis + ML training
-python3 enhanced_presence.py --mode quick --train-ml
+python3 -m rssi.enhanced_presence --mode quick --train-ml
 
 # Or separately: calibrate then train
-python3 enhanced_presence.py --mode baseline --seconds 30
-python3 enhanced_presence.py --mode movement --seconds 30
-python3 enhanced_presence.py --mode train-ml
+python3 -m rssi.enhanced_presence --mode baseline --seconds 30
+python3 -m rssi.enhanced_presence --mode movement --seconds 30
+python3 -m rssi.enhanced_presence --mode train-ml
 
 # Monitor with ML classifier (soglia probabilità 0.4)
-python3 enhanced_presence.py --mode monitor --use-ml --ml-threshold 0.4
+python3 -m rssi.enhanced_presence --mode monitor --use-ml --ml-threshold 0.4
 ```
+
+---
+### Multi-AP channel hopping
+
+**Configurazione:** [`firmware/esp32_csi_firmware/secrets.h.example`](firmware/esp32_csi_firmware/secrets.h.example)
+
+L'ESP32 commuta ciclicamente tra **3 AP telefonici** su canali 2.4 GHz fissi (1, 6, 11) per ottenere 3 prospettive CSI indipendenti. Il flusso seriale include linee `AP:<id>` e `AP_SWITCH:<id>` per tracciare l'AP attuale. Il parser in `csi_processor.py` eredita `ap_id` per ogni frame CSI.
+
+Numero AP configurabile via `#define NUM_APS` — se non definito, il firmware opera in modalita mono-AP.
+
+**Vedi:** [docs/MULTI_AP_RUVIEW.md#1-multi-ap-channel-hopping](docs/MULTI_AP_RUVIEW.md#1-multi-ap-channel-hopping)
+
+---
 
 ### CSIClassifier — Activity recognition from CSI
 
@@ -252,16 +339,103 @@ Replaces `CSIDetector` with a **Random Forest multi-class classifier** (EMPTY / 
 
 ```bash
 # Via UNO Q bridge
-python3 csi_processor.py --calibrate --train-ml --seconds 30
-python3 csi_processor.py --monitor --use-ml
+python3 -m csi.csi_processor --calibrate --train-ml --seconds 30
+python3 -m csi.csi_processor --monitor --use-ml
 
 # Via ESP32 USB (Mac/PC standalone)
-python3 csi_mac.py --calibrate --train-ml --seconds 30
-python3 csi_mac.py --monitor --use-ml
+python3 -m csi.csi_mac --calibrate --train-ml --seconds 30
+python3 -m csi.csi_mac --monitor --use-ml
 
 # Three-class training (add STATIONARY phase)
-python3 csi_processor.py --calibrate --train-ml --seconds 30 --stationary-seconds 30
+python3 -m csi.csi_processor --calibrate --train-ml --seconds 30 --stationary-seconds 30
 ```
+### MultiAP CSIClassifier
+
+**File:** [`csi/csi_ml.py`](csi/csi_ml.py)
+
+Estensione che mantiene **3 buffer interni** (uno per AP) e concatena i vettori feature in un singolo vettore di dimensione `CSI_FEATURE_SIZE × NUM_APS` (= 243 per 3 AP). Addestramento e inferenza con RandomForest.
+
+```bash
+python3 -m csi.csi_mac --calibrate --train-ml --num-aps 3
+python3 -m csi.csi_mac --monitor --use-ml --num-aps 3
+```
+
+**Vedi:** [docs/MULTI_AP_RUVIEW.md#5-multiap-csiclassifier](docs/MULTI_AP_RUVIEW.md#5-multiap-csiclassifier)
+
+### Phase Sanitizer
+
+**File:** [`csi/phase_sanitizer.py`](csi/phase_sanitizer.py)
+
+Rimuove artefatti CFO/SFO/PLL dalla fase CSI grezza: unwrap → Z-score outlier removal + interpolazione → moving average smoothing. Include `phase_difference()` per calcolo differenziale (usato dal Doppler).
+
+**Vedi:** [docs/MULTI_AP_RUVIEW.md#2-phase-sanitizer](docs/MULTI_AP_RUVIEW.md#2-phase-sanitizer)
+
+### RSSI Feature Extraction + Rule-Based Classifier
+
+**File:** [`csi_ml.py`](csi_ml.py) — classi `RSSIFeatureExtractor`, `RuleBasedClassifier`
+
+Estrae feature tempo-frequenza dal RSSI (media, varianza, skewness, kurtosis, FFT con bande respiratoria 0.1-0.5 Hz e motoria 0.5-3.0 Hz, CUSUM change-point detection) e classifica in **EMPTY / STATIONARY / MOVEMENT** con confidence scoring.
+
+**Vedi:** [docs/MULTI_AP_RUVIEW.md#3-rssi-feature-extraction](docs/MULTI_AP_RUVIEW.md#3-rssi-feature-extraction)
+
+### Doppler Shift + Sleep Quality
+
+**File:** [`csi_ml.py`](csi_ml.py) — classi `DopplerShiftExtractor`, `SleepQualityAnalyzer`
+
+Stima velocita radiale dallo sfasamento CSI (`f_Doppler = Δφ/(2π·Δt)`) e analisi respiratoria con stima stage sonno (AWAKE/REM/LIGHT/DEEP) e rilevamento apnea.
+
+**Vedi:** [docs/MULTI_AP_RUVIEW.md#6-doppler-shift-extractor](docs/MULTI_AP_RUVIEW.md#6-doppler-shift-extractor)
+
+### Room Mapping + Live Position Tracking
+
+**File:** [`mapping/room_mapper.py`](mapping/room_mapper.py), [`mapping/room_server.py`](mapping/room_server.py), [`mapping/room_map.html`](mapping/room_map.html), [`mapping/room_map_3d.html`](mapping/room_map_3d.html)
+
+Mappa la stanza tramite fingerprinting RSSI (3 AP) e stima posizione live con weighted k-NN. Il server WebSocket collega ESP32 → PositionEstimator → browser.
+
+**2D canvas:** [`mapping/room_map.html`](mapping/room_map.html) — puntino animato su griglia stanza.
+
+**3D Three.js:** [`mapping/room_map_3d.html`](mapping/room_map_3d.html) — stanza 3D con heatmap probabilistica,
+AP markers, tracciato movimento, cursori segnale, camera orbitale.
+
+```bash
+# 1. Calibrazione guidata
+python3 -m mapping.room_mapper calibrate fingerprint.json
+
+# 2. Configura posizione AP (per 3D)
+python3 -m mapping.room_mapper setup-aps fingerprint.json
+
+# 3. Server live (con ESP32 o in simulazione)
+python3 -m mapping.room_server --simulate --fingerprint fingerprint.json
+
+# 4. Browser → 2D: http://localhost:8080/room_map.html
+#             3D: http://localhost:8080/room_map_3d.html
+```
+
+**Vedi:** [docs/MULTI_AP_RUVIEW.md#8-room-mapping-e-localizzazione](docs/MULTI_AP_RUVIEW.md#8-room-mapping-e-localizzazione)
+
+### CSI Seat Mapper — Demo in aula
+
+**File:** [`csi/seat_mapper.py`](csi/seat_mapper.py), [`mapping/classroom_heatmap.html`](mapping/classroom_heatmap.html)
+
+Fingerprinting CSI multi-AP per riconoscere quale sedia è occupata. Addestra un RandomForest su dati raccolti sedia per sedia, poi predice in tempo reale via WebSocket con visualizzazione browser.
+
+```bash
+# 1. Training interattivo (prima della demo)
+python3 -m csi.seat_mapper --mode train --num-seats 10 --seconds 30
+
+#    Via BLE (invece di seriale):
+python3 -m csi.seat_mapper --mode train --ble --num-seats 10
+
+# 2. Live prediction (demo)
+python3 -m csi.seat_mapper --mode live --port 8080
+
+#    Via BLE:
+python3 -m csi.seat_mapper --mode live --ble --port 8080
+
+# Browser → http://localhost:8080/classroom_heatmap.html
+```
+
+La visualizzazione mostra la pianta dell'aula con sedie colorate: 🟢 libera, 🔴 occupata. Confidenza, RSSI e probabilità per classe in sidebar.
 
 ### Feature importance analysis
 
@@ -269,8 +443,8 @@ Both classifiers expose `feature_importance` — a ranked list of which features
 
 ```bash
 # Show feature importance after training
-python3 rssi_ml.py --load rssi_model.joblib
-python3 csi_ml.py --load csi_model.joblib
+python3 -m rssi.rssi_ml --load rssi_model.joblib
+python3 -m csi.csi_ml --load csi_model.joblib
 ```
 
 ### Dependencies
@@ -285,13 +459,29 @@ pip install scikit-learn joblib
 
 Both `rssi_ml.py` and `csi_ml.py` use **lazy imports** — they load gracefully without sklearn (returning a clear error message) if the dependencies are not installed, so existing users who don't use the ML features are unaffected.
 
-### Files
+### New: RuView-inspired features
 
 | File | What it does |
 |---|---|
-| [rssi_ml.py](rssi_ml.py) | RSSIClassifier — Random Forest binary classifier for RSSI presence detection |
-| [csi_ml.py](csi_ml.py) | CSIClassifier — Random Forest multi-class classifier for CSI activity recognition |
-| [test_ml_classifiers.py](test_ml_classifiers.py) | Tests for both classifiers with synthetic data (6 tests, feature extraction + training + inference + persistence) |
+| [`csi/phase_sanitizer.py`](csi/phase_sanitizer.py) | Phase sanitization pipeline (unwrap → outlier removal → smoothing) |
+| [`csi/csi_ml.py`](csi/csi_ml.py) | Also contains: RSSIFeatureExtractor, RuleBasedClassifier, DopplerShiftExtractor, SleepQualityAnalyzer |
+| [`csi/csi_ble.py`](csi/csi_ble.py) | BLE reader: `BleReader` + `ble_reader()`. Dipendenza: `bleak` |
+| [`csi/csi_plot.py`](csi/csi_plot.py) | Live CSI visualization (waterfall / time / bar) |
+| [`csi/csi_record.py`](csi/csi_record.py) | CSI recording and replay |
+| [`csi/seat_mapper.py`](csi/seat_mapper.py) | Seat fingerprint → RandomForest → live prediction + WebSocket |
+| [`mapping/classroom_heatmap.html`](mapping/classroom_heatmap.html) | Classroom seat visualization (WebSocket) |
+| [`tests/test_seat_mapper.py`](tests/test_seat_mapper.py) | 12 tests for seat classifier |
+| [`tests/test_ruview_features.py`](tests/test_ruview_features.py) | 29 tests covering all RuView-inspired features |
+| [`tests/test_multi_ap.py`](tests/test_multi_ap.py) | 7 tests for multi-AP classifier |
+| [`tests/test_csi_tools.py`](tests/test_csi_tools.py) | 8 tests for csi_plot.py and csi_record.py |
+| [`mapping/room_mapper.py`](mapping/room_mapper.py) | FingerprintMap + PositionEstimator (weighted k-NN) |
+| [`mapping/room_server.py`](mapping/room_server.py) | WebSocket bridge: ESP32 → PositionEstimator → browser |
+| [`mapping/room_map.html`](mapping/room_map.html) | HTML5 canvas 2D with live position dot |
+| [`mapping/room_map_3d.html`](mapping/room_map_3d.html) | Three.js 3D room with heatmap, AP markers, person tracking |
+| [`tests/test_room_mapper.py`](tests/test_room_mapper.py) | 17 tests for fingerprint map and estimator |
+| [`docs/MULTI_AP_RUVIEW.md`](docs/MULTI_AP_RUVIEW.md) | Full documentation of all new features |
+
+**Vedi la documentazione completa:** [docs/MULTI_AP_RUVIEW.md](docs/MULTI_AP_RUVIEW.md)
 
 ---
 
@@ -300,38 +490,66 @@ Both `rssi_ml.py` and `csi_ml.py` use **lazy imports** — they load gracefully 
 ```
 .
 ├── README.md                           # this file
-├── docs/
-│   ├── VISION.md                       # full If-I-Wi-Fy vision (use cases, market)
+├── .gitignore
+│
+├── docs/                               # documentation
+│   ├── VISION.md                       # full If-I-Wi-Fy vision
 │   ├── TESTING.md                      # how to run tests
-│   ├── arduino_cloud_integration.md    # optional Arduino Cloud sync
-│   ├── demo_24h_plan.md                # demo playbook
-│   └── shopping_list.md                # hardware BOM
+│   ├── MULTI_AP_RUVIEW.md              # multi-AP, RuView, room mapping docs
+│   ├── arduino_cloud_integration.md
+│   ├── demo_24h_plan.md
+│   └── shopping_list.md
 │
-├── enhanced_presence.py                # RSSI pipeline (main)
-├── calibrate_presence.py
-├── monitor_presence.py
-├── decision_engine.py
-├── feasibility_test.py
-├── bridge_client.py                    # arduino-router RPC client (CLI)
+├── rssi/                               # RSSI pipeline (UNO Q standalone)
+│   ├── __init__.py
+│   ├── enhanced_presence.py            # main detector
+│   ├── calibrate_presence.py           # calibration tool
+│   ├── monitor_presence.py             # monitor-mode capture
+│   ├── decision_engine.py              # orchestrator + STM32 bridge
+│   ├── rssi_ml.py                      # Random Forest classifier
+│   └── bridge_client.py                # arduino-router RPC client
 │
-├── csi_processor.py                    # CSI pipeline (main)
-├── csi_mac.py                          # CSI without UNO Q (Mac/PC standalone)
+├── csi/                                # CSI pipeline (UNO Q + ESP32)
+│   ├── __init__.py
+│   ├── csi_processor.py                # main CSI pipeline + CSIDetector
+│   ├── csi_mac.py                      # direct USB/BLE CSI (Mac/PC)
+│   ├── csi_ble.py                      # BLE reader (bleak)
+│   ├── csi_ml.py                       # ML classifier + feature extractors
+│   ├── csi_plot.py                     # live visualization (matplotlib)
+│   ├── csi_record.py                   # record & replay
+│   ├── seat_mapper.py                  # seat fingerprint + classroom demo
+│   └── phase_sanitizer.py              # phase unwrap + outlier removal
 │
-├── rssi_ml.py                          # ML — RSSIClassifier (Random Forest)
-├── csi_ml.py                           # ML — CSIClassifier (Random Forest)
+├── mapping/                            # Room mapping + 3D visualization
+│   ├── __init__.py
+│   ├── room_mapper.py                  # FingerprintMap + PositionEstimator
+│   ├── room_server.py                  # WebSocket bridge → browser
+│   ├── room_map.html                   # 2D canvas visualizer
+│   ├── room_map_3d.html                # 3D Three.js + heatmap
+│   └── classroom_heatmap.html          # seat mapper visualization
 │
-├── feasibility_bridge/                 # STM32 sketch: sensors + relay (RSSI pipeline)
-├── feasibility_test/                   # STM32 sketch: legacy USB-only
-├── esp32_csi_firmware/                 # ESP32 sketch: CSI capture
-├── esp32_csi_bridge/                   # STM32 sketch: ESP32→UNO Q bridge
-├── test_esp32_uart/                    # STM32 sketch: UART link tester
+├── firmware/                           # Microcontroller sketches
+│   ├── feasibility_bridge/             # STM32 sketch (RSSI pipeline)
+│   ├── esp32_csi_firmware/             # ESP32 sketch: CSI via UART (wired)
+│   ├── esp32_csi_bt/                   # ESP32 sketch: CSI via Bluetooth (wireless)
+│   └── esp32_csi_bridge/               # STM32 sketch: CSI bridge
 │
-├── test_csi_processor.py               # Python tests
-├── test_detectors.py
-├── test_ml_classifiers.py              # ML tests (6 tests, synthetic data)
+├── tests/                              # All Python tests (109 total)
+│   ├── __init__.py
+│   ├── conftest.py                     # pytest path setup
+│   ├── test_csi_processor.py           # CSI parser + detector (21 tests)
+│   ├── test_csi_tools.py               # plot + record (8 tests)
+│   ├── test_detectors.py               # gradient detector
+│   ├── test_ml_classifiers.py          # RSSI + CSI ML (6 tests)
+│   ├── test_multi_ap.py                # multi-AP support (7 tests)
+│   ├── test_room_mapper.py             # fingerprint + positioning (17 tests)
+│   ├── test_seat_mapper.py             # seat classifier (12 tests)
+│   └── test_ruview_features.py         # RuView features (29 tests)
+│
 ├── rssi_model.joblib                   # trained RSSI model (generated)
 ├── csi_model.joblib                    # trained CSI model (generated)
-└── csi_logs/                           # CSI capture output (gitignored)
+└── csi_captures/                       # CSI recording output (created at runtime)
+``` (gitignored)
 ```
 
 ---
@@ -345,7 +563,8 @@ sudo apt-get install -y iw python3-pip
 pip install msgpack pyserial
 ```
 
-`iw` is needed by the RSSI pipeline. `msgpack` is needed by anything that talks to `arduino-router` (the bridge). `pyserial` is needed by `csi_mac.py` (host-side standalone CSI).
+`iw` is needed by the RSSI pipeline. `msgpack` is needed by anything that talks to `arduino-router` (the bridge). `pyserial` is needed by `csi_mac.py` (host-side standalone CSI).  
+`bleak` is needed by `csi_ble.py` (BLE reader).
 
 For the **ML classifiers** (optional — all other features work without it):
 ```bash
@@ -359,7 +578,7 @@ pip install scikit-learn joblib
 ### Mac / PC (CSI standalone, no UNO Q)
 
 ```bash
-pip install pyserial
+pip install pyserial bleak
 # msgpack NOT required — csi_processor.py imports it lazily only when
 # RouterClient.connect() is called
 ```
