@@ -62,6 +62,13 @@ static int current_ap = 0;
 static unsigned long ap_stream_start = 0;
 
 // ============================================================
+// Pin definitions + forward declarations
+// ============================================================
+#define LED_PIN          2
+static void process_command(const char* cmd);
+static void ble_send(const char* buf, int len);
+
+// ============================================================
 // BLE — Nordic UART Service (NUS)
 // ============================================================
 
@@ -137,8 +144,6 @@ static void ble_send(const char* buf, int len) {
 // ============================================================
 #define CSI_QUEUE_SLOTS  4
 #define CSI_MAX_SUBCARRIERS 128
-
-#define LED_PIN          2
 
 // ============================================================
 // Struttura frame CSI
