@@ -188,10 +188,12 @@ class BleReader:
         await self._client.connect()
 
         srv_list = self._client.services
-        if srv_list is None or len(srv_list) == 0:
+        if srv_list is None:
             srv_list = await self._client.get_services()
+        if srv_list is None:
+            raise RuntimeError("Nessun servizio BLE trovato")
 
-        for service in srv_list:
+        for service in srv_list.services.values():
             if service.uuid == NUS_SERVICE_UUID:
                 for char in service.characteristics:
                     if char.uuid == NUS_TX_CHAR_UUID:
@@ -200,7 +202,7 @@ class BleReader:
                         self._rx_char = char
 
         if not self._tx_char or not self._rx_char:
-            found = [s.uuid for s in srv_list] if srv_list else []
+            found = list(srv_list.services.keys())
             raise RuntimeError(f"NUS service non trovato. Trovati servizi: {found}")
 
         # Sottoscrivi notifiche
