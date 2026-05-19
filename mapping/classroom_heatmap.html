@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CSI Seat Mapper — Aula</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0b0b1a;
+    color: #e2e8f0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  /* ── Header ───────────────────────────────────── */
+  #header {
+    padding: 18px 24px 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  #header h1 {
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: #38bdf8;
+    letter-spacing: 0.5px;
+  }
+  #header h1 span { color: #64748b; font-weight: 400; }
+  #header-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 0.85rem;
+    color: #94a3b8;
+  }
+  #status-dot {
+    display: inline-block;
+    width: 8px; height: 8px; border-radius: 50%;
+    margin-right: 6px;
+  }
+  #status-dot.live  { background: #22c55e; box-shadow: 0 0 6px #22c55e88; }
+  #status-dot.poll  { background: #eab308; box-shadow: 0 0 6px #eab30888; }
+  #status-dot.dead  { background: #ef4444; box-shadow: 0 0 6px #ef444488; }
+  #status-dot.demo  { background: #8b5cf6; box-shadow: 0 0 6px #8b5cf688; }
+
+  /* ── Main area ─────────────────────────────────── */
+  #main {
+    flex: 1;
+    display: flex;
+    gap: 20px;
+    padding: 8px 24px 20px;
+    min-height: 0;
+  }
+
+  /* ── Seat grid ─────────────────────────────────── */
+  #seat-area {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255,255,255,0.02);
+    border-radius: 16px;
+    border: 1px solid #1e293b;
+    padding: 20px;
+    position: relative;
+    min-height: 0;
+  }
+  #seat-grid {
+    display: grid;
+    gap: 16px;
+    justify-items: center;
+    align-items: center;
+  }
+  .seat {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: default;
+    transition: all 0.3s ease;
+    border: 2px solid rgba(255,255,255,0.08);
+    position: relative;
+  }
+  .seat .label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    pointer-events: none;
+  }
+  .seat .conf-badge {
+    font-size: 0.6rem;
+    opacity: 0.7;
+    margin-top: 2px;
+    pointer-events: none;
+  }
+  /* Stati sedia */
+  .seat.empty    { background: #0d3d2b; border-color: #166534; color: #86efac; }
+  .seat.occupied { background: #3d0d0d; border-color: #991b1b; color: #fca5a5;
+                   box-shadow: 0 0 16px #991b1b55, 0 0 32px #991b1b22; }
+  .seat.unknown  { background: #1a1a2e; border-color: #2a2a5a; color: #64748b; }
+  .seat.highlight { background: #3d0d0d; border-color: #ef4444; color: #fca5a5;
+                    box-shadow: 0 0 20px #ef444466, 0 0 40px #ef444422;
+                    transform: scale(1.1); z-index: 2; }
+  .seat.highlight::after {
+    content: "👤";
+    position: absolute;
+    top: -16px;
+    font-size: 1rem;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
+  }
+  .seat.pulse {
+    animation: pulse 1.5s ease-in-out 2;
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 transparent; }
+    50% { box-shadow: 0 0 30px #ef444488, 0 0 60px #ef444422; }
+  }
+
+  /* ── Sidebar ───────────────────────────────────── */
+  #sidebar {
+    width: 240px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .card {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid #1e293b;
+    border-radius: 12px;
+    padding: 14px 16px;
+  }
+  .card h3 {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #64748b;
+    margin-bottom: 10px;
+  }
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.82rem;
+    padding: 3px 0;
+  }
+  .stat-row .lbl { color: #94a3b8; }
+  .stat-row .val { color: #e2e8f0; font-variant-numeric: tabular-nums; font-weight: 500; }
+  .stat-row .val.high { color: #22c55e; }
+  .stat-row .val.mid  { color: #eab308; }
+  .stat-row .val.low  { color: #ef4444; }
+
+  /* Barra confidenza */
+  .conf-bar-wrap {
+    height: 8px;
+    background: #1e293b;
+    border-radius: 4px;
+    overflow: hidden;
+    margin: 6px 0 8px;
+  }
+  .conf-bar {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.3s ease, background 0.3s ease;
+    background: #22c55e;
+    width: 0%;
+  }
+  .conf-bar.mid  { background: #eab308; }
+  .conf-bar.low  { background: #ef4444; }
+
+  /* Probabilità classi */
+  .proba-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.75rem;
+    padding: 2px 0;
+  }
+  .proba-item .p-label {
+    width: 36px;
+    text-align: right;
+    color: #94a3b8;
+    font-weight: 500;
+  }
+  .proba-item .p-bar {
+    flex: 1;
+    height: 6px;
+    background: #1e293b;
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .proba-item .p-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.4s ease;
+  }
+  .proba-item .p-val {
+    width: 44px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: #64748b;
+  }
+
+  /* ── Empty state ───────────────────────────────── */
+  #empty-state {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: #475569;
+    gap: 12px;
+  }
+  #empty-state .big-icon { font-size: 3rem; opacity: 0.5; }
+  #empty-state .msg { font-size: 1rem; }
+  #empty-state .sub { font-size: 0.8rem; color: #334155; }
+
+  /* ── Responsive ────────────────────────────────── */
+  @media (max-width: 700px) {
+    #main { flex-direction: column; }
+    #sidebar { width: 100%; flex-direction: row; flex-wrap: wrap; }
+    #sidebar .card { flex: 1; min-width: 140px; }
+    .seat { width: 56px; height: 56px; font-size: 0.7rem; }
+  }
+
+  /* ── Label per EMTPY state ─────────────────────── */
+  .room-label {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.75rem;
+    color: #475569;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>📡 <span>CSI</span> Seat Mapper</h1>
+  <div id="header-right">
+    <span id="connStatus"><span id="status-dot" class="dead"></span>Disconnesso</span>
+    <span id="fpsLabel">— fps</span>
+  </div>
+</div>
+
+<div id="main">
+  <!-- Seat grid -->
+  <div id="seat-area">
+    <div class="room-label">AULA</div>
+    <div id="seat-grid"></div>
+    <div id="empty-state">
+      <div class="big-icon">📡</div>
+      <div class="msg">In attesa di connessione...</div>
+      <div class="sub">Collegati al server seat_mapper per vedere le sedie</div>
+    </div>
+  </div>
+
+  <!-- Sidebar -->
+  <div id="sidebar">
+    <div class="card">
+      <h3>Predizione</h3>
+      <div class="stat-row">
+        <span class="lbl">Sedia</span>
+        <span class="val" id="predSeat">—</span>
+      </div>
+      <div class="stat-row">
+        <span class="lbl">Confidenza</span>
+        <span class="val" id="predConf">—</span>
+      </div>
+      <div class="conf-bar-wrap">
+        <div class="conf-bar" id="confBar"></div>
+      </div>
+      <div class="stat-row">
+        <span class="lbl">RSSI</span>
+        <span class="val" id="rssiVal">—</span>
+      </div>
+      <div class="stat-row">
+        <span class="lbl">AP</span>
+        <span class="val" id="apVal">—</span>
+      </div>
+      <div class="stat-row">
+        <span class="lbl">Aggiornamento</span>
+        <span class="val" id="updateTime">—</span>
+      </div>
+    </div>
+
+    <div class="card" id="probaCard">
+      <h3>Probabilità per classe</h3>
+      <div id="probaList"></div>
+    </div>
+
+    <div class="card">
+      <h3>Configurazione</h3>
+      <div class="stat-row">
+        <span class="lbl">Sedie</span>
+        <span class="val" id="totalSeats">—</span>
+      </div>
+      <div class="stat-row">
+        <span class="lbl">AP</span>
+        <span class="val" id="numAps">3</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// Config
+// ============================================================
+const CONFIG = {
+  wsUrl: `ws://${location.hostname}:8765`,
+  reconnectInterval: 2000,
+  maxProbas: 8,            // quante classi mostrare nella sidebar
+};
+
+// ── State ───────────────────────────────────────────────────
+const state = {
+  seats: [],               // [{label, empty, confidence}]
+  connected: false,
+  prediction: '',
+  confidence: 0,
+  probabilities: {},
+  rssi: 0,
+  apId: 0,
+  fps: 0, _fc: 0, _fts: 0,
+  lastUpdate: 0,
+  rows: 5,                 // default, sovrascritto da URL params
+  cols: 4,
+};
+
+// ── Parse URL params ────────────────────────────────────────
+const params = new URLSearchParams(location.search);
+if (params.has('rows')) state.rows = parseInt(params.get('rows'));
+if (params.has('cols')) state.cols = parseInt(params.get('cols'));
+if (params.has('ws'))   CONFIG.wsUrl = params.get('ws');
+if (params.has('seats')) {
+  const n = parseInt(params.get('seats'));
+  // Auto layout: square-ish grid
+  state.cols = Math.ceil(Math.sqrt(n));
+  state.rows = Math.ceil(n / state.cols);
+}
+
+const NUM_SEATS = state.rows * state.cols;
+
+// ============================================================
+// Seat grid rendering
+// ============================================================
+const gridEl = document.getElementById('seat-grid');
+const emptyState = document.getElementById('empty-state');
+
+function buildGrid() {
+  gridEl.style.gridTemplateColumns = `repeat(${state.cols}, 1fr)`;
+  gridEl.innerHTML = '';
+
+  for (let i = 0; i < NUM_SEATS; i++) {
+    const label = i === 0 ? 'EMPTY' : `S${i - 1}`;
+    const div = document.createElement('div');
+    div.className = 'seat unknown';
+    div.id = `seat-${label}`;
+    div.innerHTML = `<div class="label">${label}</div><div class="conf-badge">—</div>`;
+    gridEl.appendChild(div);
+  }
+  emptyState.style.display = 'none';
+}
+
+function updateSeat(prediction, probabilities) {
+  // Reset tutti
+  document.querySelectorAll('.seat').forEach(el => {
+    el.className = 'seat empty';
+    const badge = el.querySelector('.conf-badge');
+    if (badge) badge.textContent = '';
+  });
+
+  if (prediction === 'EMPTY') {
+    // Tutti verdi — stanza vuota
+    return;
+  }
+
+  // Sedia predetta → evidenziata
+  const seatEl = document.getElementById(`seat-${prediction}`);
+  if (seatEl) {
+    seatEl.className = 'seat highlight pulse';
+    const prob = probabilities && probabilities[prediction] !== undefined
+      ? (probabilities[prediction] * 100).toFixed(0) + '%'
+      : '';
+    const badge = seatEl.querySelector('.conf-badge');
+    if (badge) badge.textContent = prob;
+  }
+}
+
+function updateProbas(probabilities) {
+  const container = document.getElementById('probaList');
+  if (!probabilities || Object.keys(probabilities).length === 0) {
+    container.innerHTML = '<div style="color:#475569;font-size:0.75rem;">—</div>';
+    return;
+  }
+
+  // Ordina per probabilità decrescente e prendi le top
+  const sorted = Object.entries(probabilities)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, CONFIG.maxProbas);
+
+  container.innerHTML = sorted.map(([label, prob]) => {
+    const pct = (prob * 100).toFixed(1);
+    const isPred = label === state.prediction;
+    const color = prob > 0.5 ? '#ef4444' : prob > 0.1 ? '#eab308' : '#22c55e';
+    return `
+      <div class="proba-item">
+        <span class="p-label">${label}</span>
+        <div class="p-bar">
+          <div class="p-fill" style="width:${pct}%;background:${color};"></div>
+        </div>
+        <span class="p-val">${pct}%</span>
+      </div>
+    `;
+  }).join('');
+}
+
+// ============================================================
+// HUD update
+// ============================================================
+function updateHUD(result) {
+  const predSeat = document.getElementById('predSeat');
+  const predConf = document.getElementById('predConf');
+  const confBar = document.getElementById('confBar');
+  const rssiVal = document.getElementById('rssiVal');
+  const apVal = document.getElementById('apVal');
+  const updateTime = document.getElementById('updateTime');
+  const totalSeats = document.getElementById('totalSeats');
+
+  const pred = result.prediction || '—';
+  const conf = result.confidence || 0;
+
+  predSeat.textContent = pred;
+  totalSeats.textContent = NUM_SEATS - 1;  // excl. EMPTY
+
+  // Confidenza
+  const pct = (conf * 100).toFixed(1);
+  predConf.textContent = `${pct}%`;
+  predConf.className = 'val' + (conf > 0.7 ? ' high' : conf > 0.3 ? ' mid' : ' low');
+
+  confBar.style.width = `${pct}%`;
+  confBar.className = 'conf-bar' + (conf > 0.7 ? '' : conf > 0.3 ? ' mid' : ' low');
+
+  // RSSI
+  if (result.rssi !== undefined) {
+    const rssi = result.rssi;
+    rssiVal.textContent = `${rssi} dBm`;
+    rssiVal.className = 'val' + (rssi > -60 ? ' high' : rssi > -75 ? ' mid' : ' low');
+  }
+
+  // AP
+  apVal.textContent = result.ap_id !== undefined ? `AP ${result.ap_id + 1}` : '—';
+
+  // Tempo
+  if (result.timestamp) {
+    const d = new Date(result.timestamp * 1000);
+    updateTime.textContent = d.toLocaleTimeString('it-IT');
+  }
+}
+
+// ============================================================
+// FPS counter
+// ============================================================
+function updateFps() {
+  state._fc++;
+  const now = performance.now();
+  if (now - state._fts >= 1000) {
+    state.fps = state._fc;
+    document.getElementById('fpsLabel').textContent = `${state.fps} fps`;
+    state._fc = 0;
+    state._fts = now;
+  }
+}
+
+// ============================================================
+// WebSocket
+// ============================================================
+let ws = null;
+let reconnectTimer = null;
+
+function connectWS() {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+
+  try {
+    ws = new WebSocket(CONFIG.wsUrl);
+  } catch (e) {
+    setDisconnected();
+    scheduleReconnect();
+    return;
+  }
+
+  ws.onopen = () => {
+    setConnected();
+    // Invia ping per iniziare
+    ws.send('ping');
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (data.type === 'seat_prediction') {
+        onPrediction(data);
+      }
+    } catch (e) {
+      // ignora
+    }
+  };
+
+  ws.onclose = () => {
+    setDisconnected();
+    scheduleReconnect();
+  };
+
+  ws.onerror = () => {
+    ws.close();
+  };
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(connectWS, CONFIG.reconnectInterval);
+}
+
+function setConnected() {
+  state.connected = true;
+  const dot = document.getElementById('status-dot');
+  dot.className = 'live';
+  document.getElementById('connStatus').innerHTML =
+    `<span id="status-dot" class="live"></span>Connesso`;
+}
+
+function setDisconnected() {
+  state.connected = false;
+  const dot = document.getElementById('status-dot');
+  dot.className = 'dead';
+  document.getElementById('connStatus').innerHTML =
+    `<span id="status-dot" class="dead"></span>Disconnesso`;
+
+  // Resetta visualizzazione
+  document.querySelectorAll('.seat').forEach(el => {
+    el.className = 'seat unknown';
+  });
+}
+
+function onPrediction(result) {
+  state.prediction = result.prediction || 'EMPTY';
+  state.confidence = result.confidence || 0;
+  state.probabilities = result.probabilities || {};
+  state.rssi = result.rssi || 0;
+  state.apId = result.ap_id || 0;
+  state.lastUpdate = result.timestamp || Date.now() / 1000;
+
+  updateSeat(state.prediction, state.probabilities);
+  updateProbas(state.probabilities);
+  updateHUD(result);
+  updateFps();
+}
+
+// ============================================================
+// Init
+// ============================================================
+function init() {
+  buildGrid();
+  connectWS();
+
+  // Aggiorna fps ogni secondo
+  state._fts = performance.now();
+
+  // Esponi per debug
+  window.__seatState = state;
+}
+
+init();
+</script>
+</body>
+</html>
