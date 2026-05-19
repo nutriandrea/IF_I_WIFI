@@ -187,8 +187,11 @@ class BleReader:
         self._client = BleakClient(device, timeout=CONNECT_TIMEOUT)
         await self._client.connect()
 
-        # Trova service e caratteristiche
-        for service in self._client.services:
+        srv_list = self._client.services
+        if srv_list is None or len(srv_list) == 0:
+            srv_list = await self._client.get_services()
+
+        for service in srv_list:
             if service.uuid == NUS_SERVICE_UUID:
                 for char in service.characteristics:
                     if char.uuid == NUS_TX_CHAR_UUID:
@@ -197,7 +200,8 @@ class BleReader:
                         self._rx_char = char
 
         if not self._tx_char or not self._rx_char:
-            raise RuntimeError("NUS service non trovato sul dispositivo")
+            found = [s.uuid for s in srv_list] if srv_list else []
+            raise RuntimeError(f"NUS service non trovato. Trovati servizi: {found}")
 
         # Sottoscrivi notifiche
         await self._client.start_notify(
