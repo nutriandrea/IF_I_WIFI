@@ -93,19 +93,20 @@ class BleReader:
         if not self._ensure_bleak():
             return False
 
-        # Trova il dispositivo
-        print(f"  [BLE] Scansiono per '{self.device_name}'...")
-        device = self._scan(timeout)
-        if device is None:
-            print(f"  [BLE] ERRORE: '{self.device_name}' non trovato")
-            return False
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
 
-        print(f"  [BLE] Trovato: {device.name} ({device.address})")
-
-        # Connetti in un event loop
         try:
-            self._loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self._loop)
+            print(f"  [BLE] Scansiono per '{self.device_name}'...")
+            device = self._loop.run_until_complete(
+                BleakScanner.find_device_by_name(self.device_name, timeout=timeout)
+            )
+            if device is None:
+                print(f"  [BLE] ERRORE: '{self.device_name}' non trovato")
+                return False
+
+            print(f"  [BLE] Trovato: {device.name} ({device.address})")
+
             self._loop.run_until_complete(self._do_connect(device))
             self._connected = True
             print(f"  [BLE] Connesso a {device.address}")
