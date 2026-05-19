@@ -45,7 +45,7 @@ Until recently, these demonstrations required specialized research hardware or c
 
 ---
 
-## 3. The platform: Arduino UNO Q and the dual-brain advantage TODO: aggiorna in base a quello che facciamo davvero
+## 3. The platform: Arduino UNO Q and the dual-brain advantage
 
 If-I-Wi-fy runs on the Arduino UNO Q — and the choice of platform is not incidental. The UNO Q is one of the first consumer-priced boards that natively addresses the architectural problem of edge AI: real-time deterministic control and high-level machine learning have historically required two different devices.
 
@@ -65,7 +65,7 @@ We are not waiting for the future of edge AI hardware. It is on the desk, and it
 
 ---
 
-## 4. How If-I-Wi-fy works // TODO: controlla anche in base a cosa facciamo realmente
+## 4. How If-I-Wi-fy works 
 
 If-I-Wi-fy is a three-layer system. Each layer is intentionally simple, and each is generalizable to applications beyond the proof of concept.
 
@@ -162,21 +162,7 @@ Several independent trends are converging to make If-I-Wi-fy viable today, where
 
 We are at a turning point: affordable hardware, powerful AI, and new regulations have finally aligned to move Wi-Fi sensing out of the laboratory and into the market. If-I-Wi-Fi is ready to lead this shift.
 
----
-
-## 8. Roadmap // TODO: cambia in base a quanto rusciamo a fare
-
-**Today (proof of concept).** Single-board Wi-Fi sensing demonstrator on the Arduino UNO Q. Presence and motion detection via RSSI feature extraction. On-device Random Forest classification. Closed-loop actuation through the STM32 microcontroller. Optional Arduino Cloud sync for remote dashboards.
-
-**Next 3–6 months.** Migration to Channel State Information (CSI) extraction on supported chipsets, unlocking finer-grained sensing (breathing rate, gait, posture). Multi-modal fusion with environmental sensors (temperature, humidity, air quality, light) for richer context. Multi-room mesh deployment with coordinated learning across nodes.
-
-**Next 6–18 months.** Vertical-specific reference applications — eldercare monitor, building energy optimizer, privacy-preserving security node — packaged as deployable templates. Open dataset for the developer community. Integration patterns for Home Assistant, OpenHAB, and major BMS protocols.
-
-**Longer term.** A platform layer for ambient intelligence — the equivalent of what Home Assistant is to home automation, but for sensing rather than control. A common substrate on which vertical applications are built, with a thriving developer ecosystem.
-
----
-
-## 9. What If-I-Wi-fy is, in one more sentence
+## 8. What If-I-Wi-fy is, in one more sentence
 
 It is the moment when we stop adding sensors to the world and start using the signals already in it.
 
@@ -187,10 +173,3 @@ Built on €60 of open hardware. Running entirely on the edge. Privacy-preservin
 The infrastructure is already in the room.
 
 We are just the first ones to listen.
-
-
-**Tagline candidates:**
-- *Ambient intelligence through the radio waves that already surround you.*
-- *The room already knows. We just translate.*
-- *Sense before you watch.*
-- *u*
