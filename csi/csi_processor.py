@@ -25,7 +25,7 @@ Dipendenze:
   scipy    (apt: python3-scipy,   per salvare .mat)
 """
 
-import socket, time, json, sys, os, re, argparse
+import socket, time, json, sys, os, re, argparse, struct
 # msgpack: import lazy, serve solo a RouterClient (UNO Q bridge RPC).
 # Su Mac/host senza UNO Q importare csi_processor non deve richiedere msgpack.
 from datetime import datetime
@@ -268,6 +268,94 @@ def parse_csi_line(line: str) -> dict | None:
 
     except Exception:
         return None
+
+
+# ============================================================
+# Parser frame binario ADR-018 (ispirato da RuView)
+# ============================================================
+# Formato:
+#   [0..3]   Magic: 0xC5110001 (LE u32)
+#   [4]      Node ID (u8)
+#   [5]      Numero antenne (u8)
+#   [6..7]   Numero subcarrier (LE u16)
+#   [8..11]  Frequenza MHz (LE u32)
+#   [12..15] Sequence number (LE u32)
+#   [16]     RSSI (i8)
+#   [17]     Noise floor (i8)
+#   [18..19] Reserved
+#   [20..]   I/Q pairs (i8, i8 per subcarrier)
+CSI_BINARY_MAGIC = 0xC5110001
+CSI_BINARY_HEADER_SIZE = 20
+
+
+def parse_csi_binary(data: bytes) -> dict | None:
+    """Parser per frame CSI binario in formato ADR-018.
+
+    Args:
+        data: bytes del frame (min 20 byte header + I/Q pairs).
+
+    Returns:
+        dict con campi CSI, o None se formato non valido.
+    """
+    if len(data) < CSI_BINARY_HEADER_SIZE:
+        return None
+
+    magic = struct.unpack_from("<I", data, 0)[0]
+    if magic != CSI_BINARY_MAGIC:
+        return None
+
+    node_id = data[4]
+    n_antennas = data[5]
+    n_sub = struct.unpack_from("<H", data, 6)[0]
+    freq_mhz = struct.unpack_from("<I", data, 8)[0]
+    seq = struct.unpack_from("<I", data, 12)[0]
+    rssi = struct.unpack_from("<b", data, 16)[0]
+    noise = struct.unpack_from("<b", data, 17)[0]
+
+    # Validazione
+    if n_sub < 1 or n_sub > 512:
+        return None
+    expected_iq = n_sub * n_antennas * 2
+    if len(data) < CSI_BINARY_HEADER_SIZE + expected_iq:
+        return None
+
+    # Leggi I/Q pairs
+    csi_data = []
+    for i in range(n_sub):
+        offset = CSI_BINARY_HEADER_SIZE + i * 2
+        real_v = float(struct.unpack_from("<b", data, offset)[0])
+        imag_v = float(struct.unpack_from("<b", data, offset + 1)[0])
+        ampl = sqrt(real_v ** 2 + imag_v ** 2)
+        phase = atan2(imag_v, real_v)
+        csi_data.append({
+            "subcarrier": i,
+            "real": real_v,
+            "imag": imag_v,
+            "ampl": round(ampl, 3),
+            "phase": round(phase, 4),
+        })
+
+    amps = [c["ampl"] for c in csi_data]
+
+    result = {
+        "seq": seq,
+        "mac": None,
+        "rssi": rssi,
+        "noise_floor": noise,
+        "rate": 0,
+        "bandwidth": 20,
+        "num_subcarriers": n_sub,
+        "csi": csi_data,
+        "ampl_mean": round(mean(amps), 3),
+        "ampl_std": round(stdev(amps), 3) if len(amps) >= 2 else 0,
+        "ampl_max": round(max(amps), 3),
+        "ampl_min": round(min(amps), 3),
+        "_binary": True,
+        "_node_id": node_id,
+        "_n_antennas": n_antennas,
+        "_freq_mhz": freq_mhz,
+    }
+    return result
 
 
 # ============================================================
