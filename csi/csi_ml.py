@@ -226,28 +226,33 @@ def csi_window_to_vector(frames_window: list) -> list | None:
 # Feature extraction per-MAC (per modello posizioni)
 # ============================================================
 
-def _extract_mac_profile(frames: list, mac: str | None = None) -> dict | None:
-    """Estrae ampl_mean, ampl_std, phase_mean, phase_std per un singolo MAC.
+def _extract_source_profile(frames: list, source_key: str = "mac",
+                             source_value: str | None = None) -> dict | None:
+    """Estrae ampl_mean, ampl_std, phase_mean, phase_std per una singola sorgente.
+
+    La sorgente è identificata da ``source_key`` nel dict frame (es. "mac", "source_id").
+    Se ``source_value`` è None, usa tutti i frame.
 
     Args:
         frames: lista di frame CSI.
-        mac: MAC address da filtrare (None = tutti i frame).
+        source_key: chiave nel dict frame per il raggruppamento (default "mac").
+        source_value: valore di source_key da filtrare (None = tutti i frame).
 
     Returns:
-        dict con chiavi 'ampl_mean', 'ampl_std', 'phase_mean', 'phase_std',
-        ciascuna lista di MAX_SUB valori. None se dati insufficienti.
+        dict con 'ampl_mean', 'ampl_std', 'phase_mean', 'phase_std',
+        ciascuna lista MAX_SUB valori. None se dati insufficienti.
     """
-    if mac is not None:
-        mac_frames = [f for f in frames if f.get("mac") == mac]
+    if source_value is not None:
+        filtered = [f for f in frames if f.get(source_key) == source_value]
     else:
-        mac_frames = frames
+        filtered = frames
 
-    if len(mac_frames) < 2:
+    if len(filtered) < 2:
         return None
 
     ampl_vectors = []
     phase_vectors = []
-    for f in mac_frames:
+    for f in filtered:
         csi = f.get("csi")
         if not csi or not isinstance(csi, list):
             continue
@@ -261,7 +266,6 @@ def _extract_mac_profile(frames: list, mac: str | None = None) -> dict | None:
     if not ampl_vectors:
         return None
 
-    # Allinea a MAX_SUB
     aligned_amp = []
     for v in ampl_vectors:
         if len(v) < MAX_SUB:
@@ -296,72 +300,102 @@ def _extract_mac_profile(frames: list, mac: str | None = None) -> dict | None:
     }
 
 
-def _generate_position_feature_names(macs: list[str]) -> list[str]:
-    """Genera feature names per modello posizioni con per-MAC + fase.
+# Backward compat alias
+_extract_mac_profile = lambda *a, **kw: _extract_source_profile(*a, source_key="mac", **kw)
 
-    Include feature globali + per ogni MAC: sub_mean_0..N-1, sub_std_0..N-1,
-    phase_mean_0..N-1, phase_std_0..N-1.
+
+def _prefix_from_value(value: str, source_key: str) -> str:
+    """Genera prefisso leggibile per feature name da un valore sorgente."""
+    if source_key == "mac" and len(value) > 8:
+        return value[-8:]  # ultimi 8 hex del MAC
+    return value  # source_id o MAC corto
+
+
+def _generate_source_feature_names(values: list[str], source_key: str = "mac") -> list[str]:
+    """Genera feature names per modello con per-source + fase.
+
+    Include feature globali + per ogni sorgente:
+    sub_mean_0..N-1, sub_std_0..N-1, phase_mean_0..N-1, phase_std_0..N-1.
+
+    Args:
+        values: lista di valori sorgente (MAC address o source_id).
+        source_key: "mac" → usa ultimi 8 hex, altro → usa valore intero.
+
+    Returns:
+        list[str]: nomi feature ordinati.
     """
-    names = list(GLOBAL_FEATURE_NAMES)  # inizia con feature globali
-    for mac in macs:
-        short_mac = mac[-8:] if len(mac) > 8 else mac  # ultimi 8 hex char
+    names = list(GLOBAL_FEATURE_NAMES)
+    for val in values:
+        prefix = _prefix_from_value(val, source_key)
         for i in range(NUM_CSI_SUBCARRIERS):
-            names.append(f"{short_mac}_{SUB_MEAN_PREFIX}{i}")
-            names.append(f"{short_mac}_{SUB_STD_PREFIX}{i}")
-            names.append(f"{short_mac}_{SUB_PHASE_MEAN_PREFIX}{i}")
-            names.append(f"{short_mac}_{SUB_PHASE_STD_PREFIX}{i}")
+            names.append(f"{prefix}_{SUB_MEAN_PREFIX}{i}")
+            names.append(f"{prefix}_{SUB_STD_PREFIX}{i}")
+            names.append(f"{prefix}_{SUB_PHASE_MEAN_PREFIX}{i}")
+            names.append(f"{prefix}_{SUB_PHASE_STD_PREFIX}{i}")
     return names
 
 
-def extract_csi_profile_per_mac(frames_window: list, known_macs: list[str]) -> dict:
-    """Estrae feature per-MAC con fase + feature globali.
+# Backward compat alias
+_generate_position_feature_names = lambda macs: _generate_source_feature_names(macs, "mac")
 
-    Per ogni known_mac, estrae profilo ampl_mean/ampl_std/phase_mean/phase_std
-    dai soli frame di quel MAC nella finestra. Se un MAC non ha frame sufficienti,
-    le sue feature sono zero.
+
+def extract_csi_profile_per_source(frames_window: list, known_sources: list[str],
+                                    source_key: str = "mac") -> dict:
+    """Estrae feature per-sorgente con fase + feature globali.
+
+    Per ogni known_source, estrae profilo ampl_mean/ampl_std/phase_mean/phase_std
+    dai soli frame di quella sorgente nella finestra.
 
     Args:
         frames_window: Lista di dict CSI.
-        known_macs: Lista di MAC address (stringhe 12 hex) da considerare.
+        known_sources: Lista di valori sorgente (MAC o source_id).
+        source_key: Chiave nel dict frame per filtrare (default "mac").
 
     Returns:
-        dict con feature + chiave 'window_frames', o {"_empty": True} se dati insufficienti.
+        dict con feature, o {"_empty": True}.
     """
-    # Feature globali da tutti i frame (usando extract_csi_profile)
     profile = extract_csi_profile(frames_window)
     if profile.get("_empty"):
         return {"_empty": True}
 
-    # Per-MAC + phase feature per ogni MAC noto
-    for mac in known_macs:
-        mp = _extract_mac_profile(frames_window, mac)
-        short_mac = mac[-8:] if len(mac) > 8 else mac
+    for val in known_sources:
+        sp = _extract_source_profile(frames_window, source_key, val)
+        prefix = _prefix_from_value(val, source_key)
 
-        if mp is None:
-            # MAC assente nella finestra → feature zero
+        if sp is None:
             for i in range(NUM_CSI_SUBCARRIERS):
-                profile[f"{short_mac}_{SUB_MEAN_PREFIX}{i}"] = 0.0
-                profile[f"{short_mac}_{SUB_STD_PREFIX}{i}"] = 0.0
-                profile[f"{short_mac}_{SUB_PHASE_MEAN_PREFIX}{i}"] = 0.0
-                profile[f"{short_mac}_{SUB_PHASE_STD_PREFIX}{i}"] = 0.0
+                profile[f"{prefix}_{SUB_MEAN_PREFIX}{i}"] = 0.0
+                profile[f"{prefix}_{SUB_STD_PREFIX}{i}"] = 0.0
+                profile[f"{prefix}_{SUB_PHASE_MEAN_PREFIX}{i}"] = 0.0
+                profile[f"{prefix}_{SUB_PHASE_STD_PREFIX}{i}"] = 0.0
         else:
             for i in range(NUM_CSI_SUBCARRIERS):
-                profile[f"{short_mac}_{SUB_MEAN_PREFIX}{i}"] = round(mp["ampl_mean"][i], 4)
-                profile[f"{short_mac}_{SUB_STD_PREFIX}{i}"] = round(mp["ampl_std"][i], 4)
-                profile[f"{short_mac}_{SUB_PHASE_MEAN_PREFIX}{i}"] = round(mp["phase_mean"][i], 4)
-                profile[f"{short_mac}_{SUB_PHASE_STD_PREFIX}{i}"] = round(mp["phase_std"][i], 4)
+                profile[f"{prefix}_{SUB_MEAN_PREFIX}{i}"] = round(sp["ampl_mean"][i], 4)
+                profile[f"{prefix}_{SUB_STD_PREFIX}{i}"] = round(sp["ampl_std"][i], 4)
+                profile[f"{prefix}_{SUB_PHASE_MEAN_PREFIX}{i}"] = round(sp["phase_mean"][i], 4)
+                profile[f"{prefix}_{SUB_PHASE_STD_PREFIX}{i}"] = round(sp["phase_std"][i], 4)
 
-    profile["_macs"] = known_macs
+    profile["_sources"] = known_sources
+    profile["_source_key"] = source_key
     return profile
 
 
-def csi_window_to_vector_per_mac(frames_window: list, known_macs: list[str],
-                                  feature_names: list[str]) -> list | None:
-    """Converte finestra in vettore feature flat per modello posizioni per-MAC."""
-    f = extract_csi_profile_per_mac(frames_window, known_macs)
+# Backward compat alias
+extract_csi_profile_per_mac = lambda f, m: extract_csi_profile_per_source(f, m, "mac")
+
+
+def csi_window_to_vector_per_source(frames_window: list, known_sources: list[str],
+                                     feature_names: list[str],
+                                     source_key: str = "mac") -> list | None:
+    """Converte finestra in vettore feature flat."""
+    f = extract_csi_profile_per_source(frames_window, known_sources, source_key)
     if f.get("_empty"):
         return None
     return [f[n] for n in feature_names]
+
+
+# Backward compat alias
+csi_window_to_vector_per_mac = lambda f, m, fn: csi_window_to_vector_per_source(f, m, fn, "mac")
 
 
 # ============================================================
@@ -396,7 +430,8 @@ class CSIClassifier:
         self._last_probas: dict = {lbl: 0.0 for lbl in CSI_LABELS}
         self._feature_importance: dict = {}
         self._class_labels: list[str] | None = None  # label personalizzate (posizioni)
-        self._known_macs: list[str] = []  # MAC noti per modello multi-trasmettitore
+        self._known_sources: list[str] = []  # valori sorgente (MAC o source_id)
+        self._source_key: str = "mac"  # chiave nel frame dict per grouping
         self._custom_feature_names: list[str] = []  # feature names per modello custom
 
     # ---- Properties ----
@@ -437,16 +472,19 @@ class CSIClassifier:
         return X, y
 
     def _frames_to_xy_custom(self, frames: list, label: int,
-                              known_macs: list[str],
-                              feature_names: list[str]) -> tuple:
-        """Converte lista frame in feature matrix per modello posizioni per-MAC."""
+                              known_sources: list[str],
+                              feature_names: list[str],
+                              source_key: str = "mac") -> tuple:
+        """Converte lista frame in feature matrix per modello per-sorgente."""
         X, y = [], []
         window = deque(maxlen=self.window_frames)
 
         for f in frames:
             window.append(f)
             if len(window) == self.window_frames:
-                vec = csi_window_to_vector_per_mac(list(window), known_macs, feature_names)
+                vec = csi_window_to_vector_per_source(
+                    list(window), known_sources, feature_names, source_key
+                )
                 if vec is not None:
                     X.append(vec)
                     y.append(label)
@@ -554,33 +592,75 @@ class CSIClassifier:
 
         self._class_labels = list(labeled_frames.keys())
 
-        # Scansiona tutti i frame per trovare MAC unici
-        all_macs = set()
+        # Scansiona tutti i frame per trovare sorgenti uniche
+        # Priorità: source_id > mac > nessuna
+        all_sources: set = set()
+        source_key = "source_id"  # default se troviamo source_id nei frame
         for frames in labeled_frames.values():
             for f in frames:
-                mac = f.get("mac")
-                if mac and isinstance(mac, str):
-                    all_macs.add(mac)
-        self._known_macs = sorted(all_macs)
-        if len(self._known_macs) >= 2:
-            self._custom_feature_names = _generate_position_feature_names(self._known_macs)
-            print(f"  [Posizioni] Rilevati {len(self._known_macs)} trasmettitori: {', '.join(m[-8:] for m in self._known_macs)}")
-        else:
-            self._known_macs = []
-            self._custom_feature_names = []
-            print(f"  [Posizioni] Nessun MAC multiplo rilevato, uso feature standard")
+                sid = f.get("source_id")
+                if sid is not None:
+                    all_sources.add(str(sid))
+                elif f.get("mac") and isinstance(f.get("mac"), str):
+                    all_sources.add(f.get("mac"))
+        if not all_sources:
+            source_key = "mac"  # nessuna sorgente → standard extraction
+            all_sources = set()
 
-        use_per_mac = len(self._known_macs) >= 2
+        # Se source_id presente in alcuni frame ma non in altri, usa mac
+        has_source_id = any(
+            f.get("source_id") is not None
+            for frames in labeled_frames.values()
+            for f in frames
+        )
+        if has_source_id:
+            source_key = "source_id"
+            all_sources = set()
+            for frames in labeled_frames.values():
+                for f in frames:
+                    sid = f.get("source_id")
+                    if sid is not None:
+                        all_sources.add(str(sid))
+        else:
+            macs = set()
+            for frames in labeled_frames.values():
+                for f in frames:
+                    m = f.get("mac")
+                    if m and isinstance(m, str):
+                        macs.add(m)
+            if macs:
+                source_key = "mac"
+                all_sources = macs
+
+        self._source_key = source_key
+        self._known_sources = sorted(all_sources)
+
+        use_per_source = len(self._known_sources) >= 2
+        if use_per_source:
+            self._custom_feature_names = _generate_source_feature_names(
+                self._known_sources, source_key
+            )
+            label_str = ", ".join(
+                _prefix_from_value(s, source_key) for s in self._known_sources
+            )
+            print(f"  [Posizioni] Rilevate {len(self._known_sources)} sorgenti ({source_key}): {label_str}")
+        else:
+            self._known_sources = []
+            self._custom_feature_names = []
+            print(f"  [Posizioni] Sorgente singola, uso feature standard")
 
         X, y = [], []
         class_counts = {}
         for label_idx, (label_name, frames) in enumerate(labeled_frames.items()):
             if not frames:
                 continue
-            if use_per_mac:
-                Xi, yi = self._frames_to_xy_custom(frames, label_idx,
-                                                    self._known_macs,
-                                                    self._custom_feature_names)
+            if use_per_source:
+                Xi, yi = self._frames_to_xy_custom(
+                    frames, label_idx,
+                    self._known_sources,
+                    self._custom_feature_names,
+                    source_key,
+                )
             else:
                 Xi, yi = self._frames_to_xy(frames, label_idx)
             X.extend(Xi)
@@ -591,7 +671,7 @@ class CSIClassifier:
             raise ValueError(f"Troppi pochi campioni: {len(X)} (servono almeno 10)")
 
         n_features = len(X[0])
-        feature_names = self._custom_feature_names if use_per_mac else CSI_FEATURE_NAMES
+        feature_names = self._custom_feature_names if use_per_source else CSI_FEATURE_NAMES
         print(f"  [Posizioni] Training: {len(X)} campioni x {n_features} feature")
         for name, count in class_counts.items():
             print(f"    {name}: {count}")
@@ -662,7 +742,7 @@ class CSIClassifier:
 
     def save_custom(self, path: str = POSITIONS_MODEL_PATH,
                     labels_path: str = POSITIONS_LABELS_PATH) -> str:
-        """Salva modello posizioni + etichette + MAC noti."""
+        """Salva modello posizioni + etichette + sorgenti note."""
         if not self._trained or self._class_labels is None:
             raise RuntimeError("Modello non addestrato con train_custom()")
         if _joblib is None:
@@ -671,19 +751,21 @@ class CSIClassifier:
         _joblib.dump(self._model, path)
         meta = {
             "class_labels": self._class_labels,
-            "known_macs": self._known_macs,
+            "known_sources": self._known_sources,
+            "source_key": self._source_key,
         }
         with open(labels_path, "w") as f:
             json.dump(meta, f)
         print(f"  [Posizioni] Modello salvato: {path}")
         print(f"  [Posizioni] Etichette: {self._class_labels}")
-        if self._known_macs:
-            print(f"  [Posizioni] MAC: {[m[-8:] for m in self._known_macs]}")
+        if self._known_sources:
+            print(f"  [Posizioni] Sorgenti ({self._source_key}): "
+                  f"{[_prefix_from_value(s, self._source_key) for s in self._known_sources]}")
         return path
 
     def load_custom(self, path: str = POSITIONS_MODEL_PATH,
                    labels_path: str = POSITIONS_LABELS_PATH) -> bool:
-        """Carica modello posizioni + etichette + MAC noti."""
+        """Carica modello posizioni + etichette + sorgenti note."""
         self._check_sklearn()
         if _joblib is None:
             raise RuntimeError("joblib non installato (pip install joblib)")
@@ -694,24 +776,30 @@ class CSIClassifier:
         with open(labels_path) as f:
             data = json.load(f)
 
-        # Supporta formato vecchio (solo lista) e nuovo (dict con class_labels/known_macs)
+        # Supporta formato vecchio (solo lista), nuovo (dict), e intermedio (known_macs)
         if isinstance(data, list):
             self._class_labels = data
-            self._known_macs = []
+            self._known_sources = []
+            self._source_key = "mac"
         else:
             self._class_labels = data.get("class_labels", [])
-            self._known_macs = data.get("known_macs", [])
+            # Retrocompat: "known_macs" → "known_sources"
+            self._known_sources = data.get("known_sources", data.get("known_macs", []))
+            self._source_key = data.get("source_key", "mac")
 
-        if self._known_macs:
-            self._custom_feature_names = _generate_position_feature_names(self._known_macs)
+        if self._known_sources and len(self._known_sources) >= 2:
+            self._custom_feature_names = _generate_source_feature_names(
+                self._known_sources, self._source_key
+            )
         else:
             self._custom_feature_names = []
 
         self._trained = True
         print(f"  [Posizioni] Modello caricato: {path}")
         print(f"  [Posizioni] Etichette: {self._class_labels}")
-        if self._known_macs:
-            print(f"  [Posizioni] MAC: {[m[-8:] for m in self._known_macs]}")
+        if self._known_sources:
+            print(f"  [Posizioni] Sorgenti ({self._source_key}): "
+                  f"{[_prefix_from_value(s, self._source_key) for s in self._known_sources]}")
         return True
 
     # ---- Real-time inference ----
@@ -733,11 +821,12 @@ class CSIClassifier:
             return {lbl: 0.0 for lbl in (self._class_labels or CSI_LABELS)}
         assert self._model is not None  # garantito da self.ready
 
-        # Usa feature per-MAC se MAC noti, altrimenti feature standard
-        use_per_mac = len(self._known_macs) >= 2
-        if use_per_mac:
-            vec = csi_window_to_vector_per_mac(
-                list(self.frame_hist), self._known_macs, self._custom_feature_names
+        # Usa feature per-sorgente se sorgenti multiple, altrimenti feature standard
+        use_per_source = len(self._known_sources) >= 2
+        if use_per_source:
+            vec = csi_window_to_vector_per_source(
+                list(self.frame_hist), self._known_sources,
+                self._custom_feature_names, self._source_key,
             )
             feature_domain = self._custom_feature_names
         else:
@@ -775,10 +864,11 @@ class CSIClassifier:
             return "UNKNOWN"
         assert self._model is not None  # garantito da self.ready
 
-        use_per_mac = len(self._known_macs) >= 2
-        if use_per_mac:
-            vec = csi_window_to_vector_per_mac(
-                list(self.frame_hist), self._known_macs, self._custom_feature_names
+        use_per_source = len(self._known_sources) >= 2
+        if use_per_source:
+            vec = csi_window_to_vector_per_source(
+                list(self.frame_hist), self._known_sources,
+                self._custom_feature_names, self._source_key,
             )
         else:
             vec = csi_window_to_vector(list(self.frame_hist))
