@@ -93,26 +93,31 @@ class BleReader:
         if not self._ensure_bleak():
             return False
 
+        # Event loop unico per scan + connect
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
 
+        # Trova il dispositivo
+        print(f"  [BLE] Scansiono per '{self.device_name}'...")
+        device = self._scan(timeout)
+        if device is None:
+            print(f"  [BLE] ERRORE: '{self.device_name}' non trovato")
+            self._loop.close()
+            self._loop = None
+            return False
+
+        print(f"  [BLE] Trovato: {device.name} ({device.address})")
+
+        # Connetti (stesso event loop)
         try:
-            print(f"  [BLE] Scansiono per '{self.device_name}'...")
-            device = self._loop.run_until_complete(
-                BleakScanner.find_device_by_name(self.device_name, timeout=timeout)
-            )
-            if device is None:
-                print(f"  [BLE] ERRORE: '{self.device_name}' non trovato")
-                return False
-
-            print(f"  [BLE] Trovato: {device.name} ({device.address})")
-
             self._loop.run_until_complete(self._do_connect(device))
             self._connected = True
             print(f"  [BLE] Connesso a {device.address}")
             return True
         except Exception as e:
             print(f"  [BLE] ERRORE connessione: {e}")
+            self._loop.close()
+            self._loop = None
             return False
 
     def disconnect(self):
@@ -172,13 +177,9 @@ class BleReader:
     def _scan(self, timeout: int) -> Optional[bleak.BLEDevice]:
         """Scansiona dispositivi BLE e cerca ESP32_CSI."""
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            device = loop.run_until_complete(
+            return asyncio.get_event_loop().run_until_complete(
                 BleakScanner.find_device_by_name(self.device_name, timeout=timeout)
             )
-            loop.close()
-            return device
         except Exception as e:
             print(f"  [BLE] Scan error: {e}")
             return None
@@ -188,26 +189,28 @@ class BleReader:
         self._client = BleakClient(device, timeout=CONNECT_TIMEOUT)
         await self._client.connect()
 
-        srv_list = self._client.services
-        if srv_list is None:
-            srv_list = await self._client.get_services()
-        if srv_list is None:
-            raise RuntimeError("Nessun servizio BLE trovato")
+        # Accedi ai servizi (li scopre automaticamente su macOS)
+        services = self._client.services
+        if not services:
+            print("  [BLE] Nessun servizio trovato dopo connessione")
+            raise RuntimeError("Nessun servizio BLE")
 
-        found_uuids = []
-        for service in srv_list.services.values():
-            su = service.uuid.upper()
+        found_uuids: list[str] = []
+        nus_uuid = NUS_SERVICE_UUID.lower()
+        for service in services:
+            su = service.uuid.lower()
             found_uuids.append(su)
-            if su == NUS_SERVICE_UUID:
+            if su == nus_uuid:
                 for char in service.characteristics:
-                    cu = char.uuid.upper()
-                    if cu == NUS_TX_CHAR_UUID:
+                    cu = char.uuid.lower()
+                    if cu == NUS_TX_CHAR_UUID.lower():
                         self._tx_char = char
-                    elif cu == NUS_RX_CHAR_UUID:
+                    elif cu == NUS_RX_CHAR_UUID.lower():
                         self._rx_char = char
 
         if not self._tx_char or not self._rx_char:
-            raise RuntimeError(f"NUS service non trovato. UUID trovati: {found_uuids}")
+            print(f"  [BLE] Servizi trovati: {found_uuids}")
+            raise RuntimeError("NUS service non trovato sul dispositivo")
 
         # Sottoscrivi notifiche
         await self._client.start_notify(

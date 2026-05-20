@@ -26,7 +26,7 @@
 
 #include <Arduino_RouterBridge.h>
 
-#define SERIAL_BAUD    921600
+#define SERIAL_BAUD    115200
 #define CSI_BUF_MAX    10            // frame in buffer (4096 byte cad. = 40 KB)
 #define CSI_LINE_MAX   4096          // max lunghezza frame CSI (128 subcarrier × 2 × ~10 char)
 

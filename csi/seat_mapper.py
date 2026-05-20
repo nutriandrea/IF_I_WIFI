@@ -400,6 +400,7 @@ def _autodetect_port() -> Optional[str]:
         "/dev/cu.ESP32_CSI*",           # Bluetooth SPP
         "/dev/cu.ESP32*Bluetooth*",
         "/dev/cu.usbserial*",           # USB serial (CH340/CP210x)
+        "/dev/cu.usbmodem*",            # Arduino UNO Q / board USB
         "/dev/cu.wchusbserial*",
         "/dev/ttyUSB*",
         "/dev/ttyACM*",

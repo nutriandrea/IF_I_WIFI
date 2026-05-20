@@ -104,6 +104,7 @@ def autodetect_port() -> Optional[str]:
     cands += sorted(glob.glob("/dev/cu.ESP32*Bluetooth*"))
     # USB serial
     cands += sorted(glob.glob("/dev/cu.usbserial*"))
+    cands += sorted(glob.glob("/dev/cu.usbmodem*"))
     cands += sorted(glob.glob("/dev/cu.SLAB_USBtoUART*"))
     cands += sorted(glob.glob("/dev/cu.wchusbserial*"))
     cands += sorted(glob.glob("/dev/ttyUSB*"))

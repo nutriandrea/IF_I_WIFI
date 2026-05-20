@@ -2,7 +2,7 @@
  * ESP32 CSI Firmware — WiFi CSI Streaming per UNO Q
  *
  * Cattura Channel State Information (CSI) da pacchetti WiFi
- * e li invia in formato CSV via Serial a 921600 baud.
+ * e li invia in formato CSV via Serial a 115200 baud.
  *
  * Cablaggio ESP32 → UNO Q:
  *   ESP32 GND → UNO Q GND
@@ -114,18 +114,18 @@ static void IRAM_ATTR csi_callback(void *ctx, wifi_csi_info_t *info) {
 }
 
 // === Setup CSI ===
+static wifi_csi_config_t csi_config = {
+    .lltf_en = 1,
+    .htltf_en = 1,
+    .stbc_htltf2_en = 0,
+    .ltf_merge_en = 1,
+    .channel_filter_en = 0,
+    .manu_scale = 0,
+    .shift = 0,
+};
+
 static bool setup_csi() {
     esp_wifi_set_csi_rx_cb(&csi_callback, NULL);
-
-    wifi_csi_config_t csi_config = {
-        .lltf_en = 1,
-        .htltf_en = 1,
-        .stbc_htltf2_en = 0,
-        .ltf_merge_en = 1,
-        .channel_filter_en = 0,
-        .manu_scale = 0,
-        .shift = 0,
-    };
 
     esp_err_t err;
     err = esp_wifi_set_csi_config(&csi_config);
@@ -295,7 +295,7 @@ void loop() {
         if (NUM_APS > 1) {
             unsigned long elapsed = millis() - ap_stream_start;
             if (elapsed >= (AP_CAPTURE_SECONDS * 1000UL)) {
-                esp_wifi_set_csi(&csi_config, false);  // disable CSI
+                esp_wifi_set_csi(false);  // disable CSI
                 WiFi.disconnect(true);
                 csi_initialized = false;
 
