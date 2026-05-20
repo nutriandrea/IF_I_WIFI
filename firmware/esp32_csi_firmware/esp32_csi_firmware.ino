@@ -11,7 +11,7 @@
  *   ESP32 RX  → UNO Q D1
  *
  * Formato output:
- *   CSI:<seq>:<rssi>:<noise>:<rate>:<bw>:<sub_count>:<r0,i0,r1,i1,...>
+ *   CSI:<seq>:<mac_12hex>:<rssi>:<noise>:<rate>:<bw>:<sub_count>:<r0,i0,r1,i1,...>
  *
  * Comandi via Serial (tipo ./csi_processor.py):
  *   ping    -> pong:OK
@@ -71,6 +71,7 @@ static unsigned long ap_stream_start = 0;
 // ============================================================
 typedef struct {
     uint16_t seq;
+    uint8_t mac[6];       // MAC del trasmettitore
     int8_t rssi;
     int8_t noise_floor;
     uint16_t rate;
@@ -103,6 +104,7 @@ static void IRAM_ATTR csi_callback(void *ctx, wifi_csi_info_t *info) {
                         ? CSI_MAX_SUBCARRIERS * 2 : info->len;
 
     slot->seq = ++csi_seq;
+    memcpy(slot->mac, info->mac, 6);
     slot->rssi = info->rx_ctrl.rssi;
     slot->noise_floor = info->rx_ctrl.noise_floor;
     slot->rate = info->rx_ctrl.rate;
@@ -164,6 +166,14 @@ static void handle_commands() {
     }
 }
 
+// === Helper: stampa MAC come 12 cifre esadecimali ===
+static void print_mac(const uint8_t *mac) {
+    for (int i = 0; i < 6; i++) {
+        if (mac[i] < 0x10) Serial.print("0");
+        Serial.print(mac[i], HEX);
+    }
+}
+
 // === Output frame CSI su Serial ===
 static void output_frames() {
     if (csi_tail == csi_head) return;
@@ -173,6 +183,8 @@ static void output_frames() {
 
     Serial.print("CSI:");
     Serial.print(slot->seq);
+    Serial.print(":");
+    print_mac(slot->mac);
     Serial.print(":");
     Serial.print(slot->rssi);
     Serial.print(":");
@@ -304,7 +316,10 @@ void loop() {
                 Serial.print("AP_SWITCH:");
                 Serial.println(current_ap);
 
-                last_wifi_check = 0;  // forza riconnessione immediata
+                // Avvia connessione al nuovo AP immediatamente
+                WiFi.begin(AP_CREDS[current_ap].ssid, AP_CREDS[current_ap].pass);
+
+                last_wifi_check = 0;  // forza check immediato
                 digitalWrite(LED_PIN, LOW);
             }
         }
