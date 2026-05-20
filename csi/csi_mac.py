@@ -31,6 +31,7 @@ import glob
 import json
 import os
 import signal
+import socket
 import sys
 import threading
 import time
@@ -46,7 +47,7 @@ except ImportError:
     sys.exit("Manca pyserial. Installa con:  pip install pyserial")
 
 # Riusa parser e detector esistenti
-from .csi_processor import parse_csi_line, CSIDetector
+from .csi_processor import parse_csi_line, parse_csi_binary, CSIDetector
 
 # CSI ML Classifier: import lazy
 try:
@@ -78,7 +79,19 @@ def line_source(args) -> Iterator[tuple[str, str | None]]:
 
     source_id è None per singola porta seriale o BLE,
     oppure "rx0", "rx1", ... per multi-rx.
+
+    Supporta:
+      - Seriale USB (default)
+      - BLE (--ble)
+      - Multi-rx seriale (--multi-rx)
+      - UDP (--udp-port) — legge frame binari ADR-018 + testo
     """
+    udp_port = getattr(args, "udp_port", None)
+    if udp_port:
+        print(f"# UDP ricevitore: porta {udp_port}", file=sys.stderr)
+        yield from _udp_source(udp_port)
+        return
+
     multi_rx = getattr(args, "multi_rx", None)
     if multi_rx:
         ports = [p.strip() for p in multi_rx.split(",")]
@@ -187,6 +200,70 @@ def open_port(port: Optional[str], baud: int) -> serial.Serial:
         return serial.Serial(p, baud, timeout=0.1)
     except serial.SerialException as e:
         sys.exit(f"Impossibile aprire {p}: {e}")
+
+
+# ============================================================
+# UDP source (ADR-018 binary frames + testo)
+# ============================================================
+def _udp_source(port: int) -> Iterator[tuple[str, str | None]]:
+    """Legge frame CSI via UDP. Supporta frame binari ADR-018 e testo.
+
+    Frame binario (ADR-018): magic 0xC5110001 -> parse_csi_binary()
+    Frame testo:            'CSI:...'  -> parse_csi_line()
+
+    Restituisce sempre (linea_testo, source_id) per compatibilità.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("0.0.0.0", port))
+    sock.settimeout(1.0)
+    print(f"  UDP in ascolto su 0.0.0.0:{port}", file=sys.stderr)
+
+    text_buf = bytearray()
+
+    while True:
+        try:
+            data, addr = sock.recvfrom(65535)
+        except socket.timeout:
+            continue
+        except OSError:
+            break
+
+        if not data:
+            continue
+
+        # Prova come frame binario ADR-018
+        if len(data) >= 4:
+            magic = int.from_bytes(data[:4], "little")
+            if magic == 0xC5110001:
+                parsed = parse_csi_binary(data)
+                if parsed:
+                    yield (_dict_to_csi_line(parsed), None)
+                    continue
+
+        # Testo su UDP: accumula e splitta per newline
+        text_buf.extend(data)
+        while b"\n" in text_buf:
+            line, _, text_buf = text_buf.partition(b"\n")
+            decoded = line.decode("utf-8", errors="replace").rstrip("\r")
+            yield (decoded, None)
+
+
+def _dict_to_csi_line(d: dict) -> str:
+    """Converte dict CSI in linea testo CSI:<seq>:<mac>:<rssi>:<noise>:...."""
+    mac = d.get("mac") or "000000000000"
+    if isinstance(mac, bytes):
+        mac = mac.hex()
+    csi = d.get("csi", [])
+    iq = []
+    for c in csi:
+        iq.append(str(int(c.get("real", 0))))
+        iq.append(str(int(c.get("imag", 0))))
+    return (f"CSI:{d.get('seq', 0)}:{mac}:"
+            f"{d.get('rssi', 0)}:{d.get('noise_floor', 0)}:"
+            f"{d.get('rate', 0)}:{d.get('bandwidth', 20)}:"
+            f"{d.get('num_subcarriers', 0)}:"
+            f"{','.join(iq)}")
 
 
 # ============================================================
@@ -751,9 +828,11 @@ def main() -> int:
     ap.add_argument("--ble", action="store_true",
                     help="Usa BLE invece di seriale (ESP32 BLE firmware)")
     ap.add_argument("--multi-rx", type=str, default=None,
-                    help="Multi-ricevitore: porte separate da virgola (es. /dev/ttyUSB0,/dev/ttyUSB1)")
+                     help="Multi-ricevitore: porte separate da virgola (es. /dev/ttyUSB0,/dev/ttyUSB1)")
     ap.add_argument("--ap-mode", action="store_true",
-                    help="ESP32 in AP mode (3 PC si connettono direttamente)")
+                     help="ESP32 in AP mode (3 PC si connettono direttamente)")
+    ap.add_argument("--udp-port", type=int, default=None,
+                     help="Porta UDP per ricevere frame ESP32 (evita crash USB su ESP32-S3)")
 
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--monitor", action="store_true",
