@@ -26,3 +26,5 @@ enh_calib_*.json
 # MACOS FILES
 .DS_Store   
 
+*.joblib
+csi/*.json
