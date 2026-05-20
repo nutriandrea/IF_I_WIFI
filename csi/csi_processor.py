@@ -109,9 +109,9 @@ class RouterClient:
 # Parser frame CSI
 # ============================================================
 
-# Nuovo formato: CSI:<seq>:<rssi>:<noise>:<rate>:<bw>:<sub_count>:<r0,i0,r1,i1,...>
+# Nuovo formato: CSI:<seq>:<mac_12hex>:<rssi>:<noise>:<rate>:<bw>:<sub_count>:<r0,i0,r1,i1,...>
 _RE_CSI = re.compile(
-    r"CSI:(\d+):(-?\d+):(-?\d+):(\d+):(\d+):(\d+):([\d,\-]*)"
+    r"CSI:(\d+):(?:([0-9a-fA-F]{12}):)?(-?\d+):(-?\d+):(\d+):(\d+):(\d+):([\d,\-]*)"
 )
 
 # Multi-AP context (AP:<id> lines from firmware)
@@ -154,12 +154,13 @@ def parse_csi_line(line: str) -> dict | None:
     if m:
         try:
             seq = int(m.group(1))
-            rssi = int(m.group(2))
-            noise = int(m.group(3))
-            rate = int(m.group(4))
-            bw = int(m.group(5))
-            sub_count = int(m.group(6))
-            raw_numbers = m.group(7).split(",")
+            mac_raw = m.group(2)  # 12-char hex o None se vecchio formato
+            rssi = int(m.group(3))
+            noise = int(m.group(4))
+            rate = int(m.group(5))
+            bw = int(m.group(6))
+            sub_count = int(m.group(7))
+            raw_numbers = m.group(8).split(",")
 
             n_values = min(len(raw_numbers), sub_count * 2)
             csi_data = []
@@ -180,6 +181,7 @@ def parse_csi_line(line: str) -> dict | None:
 
             result = {
                 "seq": seq,
+                "mac": mac_raw.upper() if mac_raw else None,
                 "rssi": rssi,
                 "noise_floor": noise,
                 "rate": rate,
