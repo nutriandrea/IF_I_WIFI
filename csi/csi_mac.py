@@ -6,7 +6,7 @@ Legge il flusso CSI dall'ESP32 connesso in USB al Mac (o a un qualsiasi
 host con pyserial), senza passare dalla UNO Q / arduino-router.
 
 L'ESP32 deve avere caricato esp32_csi_firmware/esp32_csi_firmware.ino
-che stampa "CSI:<seq>:<rssi>:<noise>:<rate>:<bw>:<sub>:<r0,i0,...>" a 921600 baud.
+che stampa "CSI:<seq>:<rssi>:<noise>:<rate>:<bw>:<sub>:<r0,i0,...>" a 115200 baud.
 
 Modalita':
   --monitor             Real-time presence detection con CSIDetector
@@ -48,17 +48,15 @@ from .csi_processor import parse_csi_line, CSIDetector
 
 # CSI ML Classifier: import lazy
 try:
-    from .csi_ml import CSIClassifier, MultiAPCSIClassifier, CSI_CLASSES, CSI_LABELS, CSI_MODEL_PATH
+    from .csi_ml import CSIClassifier, CSI_MODEL_PATH
+    from .csi_ml import POSITIONS_MODEL_PATH, POSITIONS_LABELS_PATH
     _CSI_ML_AVAILABLE = True
-except ImportError:
+except Exception:
     CSIClassifier = None
-    MultiAPCSIClassifier = None
-    CSI_CLASSES = {}
-    CSI_LABELS = []
     CSI_MODEL_PATH = None
     _CSI_ML_AVAILABLE = False
 
-DEFAULT_BAUD = 921600
+DEFAULT_BAUD = 115200
 
 # BLE reader (opzionale)
 _BLE_READER_CLASS = None
@@ -145,6 +143,11 @@ def cmd_monitor(args) -> int:
     det = None
     use_ml = args.use_ml
 
+    # Preparazione heatmap
+    track_heatmap = {"fig": None, "ax": None, "im": None, "plt": None}
+    grid_rows, grid_cols = 0, 0
+    heatmap_enabled = args.heatmap
+
     if use_ml:
         if not _CSI_ML_AVAILABLE or CSIClassifier is None:
             print("  [ML] sklearn non installato. Uso CSIDetector classico.",
@@ -155,15 +158,62 @@ def cmd_monitor(args) -> int:
             if args.num_aps > 1:
                 ml_clf = MultiAPCSIClassifier(window_frames=30, num_aps=args.num_aps)
             else:
-                ml_clf = CSIClassifier(window_frames=30)
-            model_file = args.ml_model or CSI_MODEL_PATH
-            if model_file and os.path.exists(model_file):
-                ml_clf.load(model_file)
-                print(f"  Modello ML caricato da: {model_file}", file=sys.stderr)
+                ml_clf = CSIClassifier(window_frames=args.window)
+            # Prova modello posizioni prima, poi standard
+            if ml_clf.load_custom():
+                print(f"  Modello posizioni caricato.", file=sys.stderr)
+                # Verifica se è modello griglia per heatmap
+                labels = ml_clf._class_labels or []
+                if heatmap_enabled and _is_grid_labels(labels):
+                    grid_rows, grid_cols = _parse_grid_dims(labels)
+                    if grid_rows > 0 and grid_cols > 0:
+                        print(f"  Heatmap griglia {grid_rows}x{grid_cols} attivata.",
+                              file=sys.stderr)
             else:
-                print(f"  Modello ML non trovato, uso CSIDetector classico.",
-                      file=sys.stderr)
-                use_ml = False
+                model_file = args.ml_model or CSI_MODEL_PATH
+                if model_file and os.path.exists(model_file):
+                    ml_clf.load(model_file)
+                    print(f"  Modello ML caricato da: {model_file}", file=sys.stderr)
+                else:
+                    print(f"  Modello ML non trovato, uso CSIDetector classico.",
+                          file=sys.stderr)
+                    use_ml = False
+
+    if not use_ml:
+        det = CSIDetector(
+            window_size=args.window,
+            ampl_threshold=args.ampl_th,
+            var_threshold=args.var_th,
+        )
+
+    # Inizializza heatmap matplotlib
+    if heatmap_enabled and grid_rows > 0:
+        try:
+            import matplotlib
+            matplotlib.use("TkAgg")
+            import matplotlib.pyplot as plt
+            track_heatmap["plt"] = plt
+            fig, ax = plt.subplots(figsize=(5, 4))
+            fig.suptitle("CSI Posizioni Heatmap", fontsize=12)
+            ax.set_xlabel("Colonna")
+            ax.set_ylabel("Riga")
+            ax.set_xticks(range(grid_cols))
+            ax.set_yticks(range(grid_rows))
+            ax.set_xticklabels([f"c{c}" for c in range(grid_cols)])
+            ax.set_yticklabels([f"r{r}" for r in range(grid_rows)])
+            im = ax.imshow(
+                [[0.0] * grid_cols for _ in range(grid_rows)],
+                vmin=0.0, vmax=1.0, cmap="YlOrRd", aspect="auto", origin="upper"
+            )
+            plt.colorbar(im, ax=ax, label="Probabilità")
+            track_heatmap["fig"] = fig
+            track_heatmap["ax"] = ax
+            track_heatmap["im"] = im
+            plt.ion()
+            plt.show(block=False)
+        except Exception as e:
+            print(f"  Heatmap non disponibile: {e}", file=sys.stderr)
+            heatmap_enabled = False
 
     if not use_ml:
         det = CSIDetector(
@@ -173,10 +223,20 @@ def cmd_monitor(args) -> int:
         )
 
     if use_ml:
-        print(f"\n  CSI ML Monitor — Ctrl+C per uscire")
-        print(f"  {'t(s)':>5} {'RSSI':>5} {'EMPTY':>7} {'STILL':>7} "
-              f"{'MOVE':>7} {'Classe':>12}")
-        print(f"  {'-'*48}")
+        # Header dipende dal tipo di modello
+        is_positions = ml_clf is not None and ml_clf._class_labels is not None
+        if is_positions:
+            mac_info = ""
+            if ml_clf._known_macs:
+                mac_info = f"  MAC: {', '.join(m[-8:] for m in ml_clf._known_macs)}"
+            print(f"\n  CSI Posizioni Monitor — Ctrl+C per uscire{mac_info}")
+            print(f"  {'t(s)':>5} {'RSSI':>5} {'Conf':>7}  {'Posizione':>20}")
+            print(f"  {'-'*42}")
+        else:
+            print(f"\n  CSI ML Monitor — Ctrl+C per uscire")
+            print(f"  {'t(s)':>5} {'RSSI':>5} {'EMPTY':>7} {'STILL':>7} "
+                  f"{'MOVE':>7} {'Classe':>12}")
+            print(f"  {'-'*48}")
     else:
         print(f"\n  Monitor CSI — Ctrl+C per uscire")
         print(f"  {'t(s)':>6} {'seq':>5} {'subc':>4} {'ampl_mean':>9} "
@@ -218,15 +278,46 @@ def cmd_monitor(args) -> int:
                 probas = ml_clf.predict_proba()
                 cls = ml_clf.predict()
 
+                # Aggiorna heatmap matplotlib se attiva
+                hm_im = track_heatmap["im"]
+                hm_plt = track_heatmap["plt"]
+                if heatmap_enabled and hm_im is not None and grid_rows > 0 \
+                   and seen % args.print_every == 0 and probas:
+                    grid_data = []
+                    for r in range(grid_rows):
+                        row_data = []
+                        for c in range(grid_cols):
+                            label = f"r{r}c{c}"
+                            row_data.append(probas.get(label, 0.0))
+                        grid_data.append(row_data)
+                    hm_im.set_data(grid_data)
+                    hm_im.axes.figure.canvas.draw_idle()
+                    hm_plt.pause(0.001)
+
+                # Se modello posizioni, mostra solo classe + prob max
+                is_positions = ml_clf._class_labels is not None
+
                 if seen % args.print_every == 0:
                     t = time.time() - t0
-                    print(f"  {t:>5.1f} "
-                          f"{parsed.get('rssi', 0):>+5d} "
-                          f"{probas.get('EMPTY', 0):>7.3f} "
-                          f"{probas.get('STATIONARY', 0):>7.3f} "
-                          f"{probas.get('MOVEMENT', 0):>7.3f} "
-                          f"{cls:>12}",
-                          flush=True)
+                    if is_positions:
+                        max_prob = max(probas.values()) if probas else 0.0
+                        mac_short = ""
+                        frame_mac = parsed.get("mac", "")
+                        if frame_mac and isinstance(frame_mac, str) and len(frame_mac) >= 8:
+                            mac_short = f"MAC:{frame_mac[-8:]} "
+                        print(f"  {t:>5.1f} "
+                              f"{parsed.get('rssi', 0):>+5d} "
+                              f"{max_prob:>7.3f}  "
+                              f"{mac_short}{cls:>20}",
+                              flush=True)
+                    else:
+                        print(f"  {t:>5.1f} "
+                              f"{parsed.get('rssi', 0):>+5d} "
+                              f"{probas.get('EMPTY', 0):>7.3f} "
+                              f"{probas.get('STATIONARY', 0):>7.3f} "
+                              f"{probas.get('MOVEMENT', 0):>7.3f} "
+                              f"{cls:>12}",
+                              flush=True)
             else:
                 assert det is not None
                 presence, info = det.update(parsed)
@@ -300,10 +391,22 @@ def cmd_capture(args) -> int:
 # ============================================================
 # Modalita': calibrate (baseline + movement + analyze)
 # ============================================================
+def _drain_buffer(it: Iterator[str], timeout: float = 3.0):
+    """Consuma e scarta linee dal buffer seriale per 'timeout' secondi."""
+    t_end = time.time() + timeout
+    for line in it:
+        if time.time() >= t_end:
+            break
+
+
 def _collect_frames(it: Iterator[str], seconds: int, label: str) -> list[dict]:
     print(f"\n  Raccolta '{label}' — {seconds}s")
     print(f"  {'MUOVITI' if label == 'movement' else 'RIMANI FERMO'}.\n")
     frames: list[dict] = []
+
+    # Scarta buffer seriale accumulato durante l'attesa (max 3s)
+    _drain_buffer(it, timeout=3.0)
+
     t0 = time.time()
     last_report = 0.0
     for line in it:
@@ -427,6 +530,137 @@ def cmd_calibrate(args) -> int:
 
 
 # ============================================================
+# Heatmap
+# ============================================================
+
+def _is_grid_labels(labels: list[str]) -> bool:
+    """Controlla se le etichette includono posizioni formato griglia r<N>c<M>.
+    Almeno metà delle etichette (escluse baseline come 'vuoto') deve matchare."""
+    if not labels:
+        return False
+    import re
+    n_grid = sum(1 for lbl in labels if re.match(r"^r\d+c\d+$", lbl))
+    n_other = len(labels) - n_grid
+    # Griglia se almeno 1 cella griglia e non più non-griglia che celle griglia
+    return n_grid >= 1 and n_grid >= n_other
+
+
+def _parse_grid_dims(labels: list[str]) -> tuple[int, int]:
+    """Estrae dimensioni griglia da etichette formato r<N>c<M>.
+    Ignora etichette non-grid (es. 'vuoto').
+    Restituisce (rows, cols) o (0, 0) se non rilevabile."""
+    import re
+    rows = set()
+    cols = set()
+    for lbl in labels:
+        m = re.match(r"^r(\d+)c(\d+)$", lbl)
+        if m:
+            rows.add(int(m.group(1)))
+            cols.add(int(m.group(2)))
+    if not rows or not cols:
+        return 0, 0
+    return max(rows) + 1, max(cols) + 1
+
+
+# ============================================================
+# Comandi CLI
+# ============================================================
+
+
+def _countdown(seconds: int = 5):
+    """Conto alla rovescia prima della registrazione."""
+    for i in range(seconds, 0, -1):
+        print(f"  {i}...", end=" ", flush=True)
+        time.sleep(1)
+    print("VIA!", flush=True)
+
+
+def cmd_positions(args) -> int:
+    """Colleziona CSI per posizioni (libere o su griglia) e addestra modello."""
+    if not _CSI_ML_AVAILABLE or CSIClassifier is None:
+        print("sklearn non installato. pip install scikit-learn joblib")
+        return 1
+
+    it = iter(line_source(args))
+    labeled_frames: dict[str, list] = {}
+    seconds = args.seconds
+
+    # Modalità griglia vs posizioni libere
+    grid_rows, grid_cols = 0, 0
+    if args.grid:
+        try:
+            parts = args.grid.lower().split("x")
+            grid_rows, grid_cols = int(parts[0]), int(parts[1])
+            if grid_rows < 1 or grid_cols < 1:
+                raise ValueError
+        except (ValueError, IndexError):
+            print(f"  ERRORE: formato griglia non valido: '{args.grid}' (usa ROWSxCOLS es. 3x3)")
+            return 1
+        n_positions = grid_rows * grid_cols
+        print(f"\n  Colleziono dati per griglia {grid_rows}x{grid_cols} "
+              f"({n_positions} celle) + vuoto ({seconds}s ciascuna)\n")
+        labels_hint = [f"r{r}c{c}" for r in range(grid_rows) for c in range(grid_cols)]
+    else:
+        n_positions = args.num_positions
+        print(f"\n  Colleziono dati per {n_positions} posizioni + vuoto ({seconds}s ciascuna)\n")
+
+    # 1. Baseline vuoto
+    print("=" * 50)
+    print("  FASE 1: STANZA VUOTA (baseline)")
+    print("  Tutti fuori dalla stanza. Premi INVIO quando pronto.")
+    print("=" * 50)
+    input()
+    _countdown()
+    labeled_frames["vuoto"] = _collect_frames(it, seconds, "vuoto")
+    print(f"  -> {len(labeled_frames['vuoto'])} frame raccolti\n")
+
+    # 2. Posizioni
+    for i in range(n_positions):
+        print("=" * 50)
+        if args.grid:
+            r, c = i // grid_cols, i % grid_cols
+            default_label = f"r{r}c{c}"
+            hint = f"  GRIGLIA: cella ({r + 1}, {c + 1})/{grid_rows}x{grid_cols} — {default_label}"
+            label = input(f"  {hint} [INVIO=ok, o nome diverso]: ").strip()
+            if not label:
+                label = default_label
+        else:
+            label = input(f"  POSIZIONE {i + 1}/{n_positions} — Nome (es. divano, sedia): ").strip()
+            if not label:
+                label = f"posto{i + 1}"
+        print(f"  Mettiti in '{label}'. Premi INVIO quando pronto.")
+        print("=" * 50)
+        input()
+        _countdown()
+        labeled_frames[label] = _collect_frames(it, seconds, label)
+        print(f"  -> {len(labeled_frames[label])} frame raccolti\n")
+
+    # Verifica minimo frame
+    for name, frames in labeled_frames.items():
+        if len(frames) < 10:
+            print(f"  ERRORE: '{name}' ha solo {len(frames)} frame (servono >= 10)")
+            return 1
+
+    # 3. Training
+    print("\n" + "=" * 50)
+    print("  TRAINING MODELLO POSIZIONI")
+    print("=" * 50)
+    clf = CSIClassifier(window_frames=args.window)
+    try:
+        metrics = clf.train_custom(labeled_frames)
+        clf.save_custom()
+        print(f"\n  Modello posizioni salvato!")
+        print(f"  Classi: {list(labeled_frames.keys())}")
+        if args.grid:
+            print(f"  Griglia: {grid_rows}x{grid_cols}")
+    except Exception as e:
+        print(f"  ERRORE training: {e}")
+        return 1
+
+    return 0
+
+
+# ============================================================
 # Main
 # ============================================================
 def main() -> int:
@@ -443,7 +677,15 @@ def main() -> int:
                       help="Salva CSI su file per N secondi")
     mode.add_argument("--calibrate", action="store_true",
                       help="Baseline + movement + analisi")
+    mode.add_argument("--positions", action="store_true",
+                      help="Colleziona dati per N posizioni e addestra modello")
 
+    ap.add_argument("--num-positions", type=int, default=4,
+                    help="Numero di posizioni da collezionare (default 4)")
+    ap.add_argument("--grid", type=str, default=None,
+                    help="Griglia ROWSxCOLS per heatmap posizioni (es. 3x3). Sostituisce --num-positions")
+    ap.add_argument("--heatmap", action="store_true",
+                    help="Mostra heatmap probabilità su griglia (--monitor + modello griglia)")
     ap.add_argument("--seconds", type=int, default=30,
                     help="Durata capture/calibrate (default 30)")
     ap.add_argument("--label", help="Etichetta per file capture")
@@ -473,6 +715,8 @@ def main() -> int:
         return cmd_capture(args)
     if args.calibrate:
         return cmd_calibrate(args)
+    if args.positions:
+        return cmd_positions(args)
     return 1
 
 
