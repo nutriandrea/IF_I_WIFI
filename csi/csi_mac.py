@@ -32,11 +32,13 @@ import json
 import os
 import signal
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 from statistics import mean, stdev
 from typing import Iterator, Optional
+from queue import Queue
 
 try:
     import serial
@@ -71,25 +73,31 @@ except ImportError:
 # Data source factory: serial OR BLE
 # ============================================================
 
-def line_source(args) -> Iterator[str]:
-    """Restituisce un iteratore di linee da seriale o BLE.
+def line_source(args) -> Iterator[tuple[str, str | None]]:
+    """Restituisce un iteratore di (linea, source_id).
 
-    Args:
-        args: namespace argparse con attributi .ble, .port, .baud
-
-    Returns:
-        Iterator[str]: linee di testo (es. "CSI:1:-45:-90:6:20:16:...")
+    source_id è None per singola porta seriale o BLE,
+    oppure "rx0", "rx1", ... per multi-rx.
     """
-    if getattr(args, "ble", False):
+    multi_rx = getattr(args, "multi_rx", None)
+    if multi_rx:
+        ports = [p.strip() for p in multi_rx.split(",")]
+        print(f"# multi-rx: {len(ports)} porte", file=sys.stderr)
+        for p in ports:
+            print(f"  {p}", file=sys.stderr)
+        yield from _multi_rx_source(ports, args.baud)
+    elif getattr(args, "ble", False):
         if _BLE_READER_CLASS is None:
             sys.exit("BLE non disponibile. pip install bleak")
         reader = _BLE_READER_CLASS()
         if not reader.connect():
             sys.exit("Connessione BLE fallita")
-        return reader.iter_lines()
+        for line in reader.iter_lines():
+            yield (line, None)
     else:
         ser = open_port(args.port, args.baud)
-        return iter_lines(ser)
+        for line in iter_lines(ser):
+            yield (line, None)
 
 
 # ============================================================
@@ -122,6 +130,52 @@ def iter_lines(ser: serial.Serial) -> Iterator[str]:
             line, _, rest = buf.partition(b"\n")
             buf = bytearray(rest)
             yield line.decode("utf-8", errors="replace").rstrip("\r")
+
+
+def _multi_rx_source(ports: list[str], baud: int) -> Iterator[tuple[str, str | None]]:
+    """Legge da N porte seriali in parallelo usando thread.
+
+    Ogni thread legge una porta e mette (linea, source_id) in una coda.
+    source_id è "rx0", "rx1", ... in ordine di ports.
+    """
+    q: Queue = Queue()
+    stop = threading.Event()
+
+    def _reader(idx: int, port: str):
+        try:
+            ser = open_port(port, baud)
+            buf = bytearray()
+            while not stop.is_set():
+                try:
+                    if ser.in_waiting:
+                        buf.extend(ser.read(ser.in_waiting))
+                        while b"\n" in buf:
+                            line, _, rest = buf.partition(b"\n")
+                            buf = bytearray(rest)
+                            q.put((line.decode("utf-8", errors="replace").rstrip("\r"),
+                                   f"rx{idx}"))
+                except serial.SerialException:
+                    break
+        except Exception as e:
+            print(f"  ERRORE reader {idx} ({port}): {e}", file=sys.stderr)
+
+    threads = []
+    for i, p in enumerate(ports):
+        t = threading.Thread(target=_reader, args=(i, p), daemon=True)
+        t.start()
+        threads.append(t)
+
+    try:
+        alive = len(threads)
+        while alive > 0:
+            line, sid = q.get()
+            yield (line, sid)
+            # check thread health
+            alive = sum(1 for t in threads if t.is_alive())
+            if alive < len(threads):
+                break
+    except GeneratorExit:
+        stop.set()
 
 
 def open_port(port: Optional[str], baud: int) -> serial.Serial:
@@ -226,10 +280,17 @@ def cmd_monitor(args) -> int:
         # Header dipende dal tipo di modello
         is_positions = ml_clf is not None and ml_clf._class_labels is not None
         if is_positions:
-            mac_info = ""
-            if ml_clf._known_macs:
-                mac_info = f"  MAC: {', '.join(m[-8:] for m in ml_clf._known_macs)}"
-            print(f"\n  CSI Posizioni Monitor — Ctrl+C per uscire{mac_info}")
+            source_info = ""
+            if ml_clf._known_sources:
+                if ml_clf._source_key == "source_id":
+                    sources_str = ", ".join(ml_clf._known_sources)
+                    source_info = f"  Sorgenti: {sources_str}"
+                else:
+                    # MAC mode: short names
+                    mac_prefix_start = max(0, len(ml_clf._known_sources[0]) - 8) if ml_clf._known_sources else 0
+                    sources_str = ", ".join(s[-8:] for s in ml_clf._known_sources if len(s) >= 8)
+                    source_info = f"  MAC: {sources_str}"
+            print(f"\n  CSI Posizioni Monitor — Ctrl+C per uscire{source_info}")
             print(f"  {'t(s)':>5} {'RSSI':>5} {'Conf':>7}  {'Posizione':>20}")
             print(f"  {'-'*42}")
         else:
@@ -254,9 +315,14 @@ def cmd_monitor(args) -> int:
     signal.signal(signal.SIGTERM, handle_sig)
 
     try:
-        for line in line_source(args):
+        for item in line_source(args):
             if stop["v"]:
                 break
+            # Supporta str (retrocompat) e tuple (line, source_id)
+            if isinstance(item, tuple):
+                line, source_id = item
+            else:
+                line, source_id = item, None
             if not line:
                 continue
             # righe di debug del firmware (WiFi:, CSI:enabled, ESP32_CSI_READY)
@@ -270,6 +336,8 @@ def cmd_monitor(args) -> int:
                 skipped += 1
                 continue
             seen += 1
+            if source_id is not None:
+                parsed["source_id"] = source_id
 
             if use_ml:
                 assert ml_clf is not None
@@ -364,7 +432,11 @@ def cmd_capture(args) -> int:
     with open(out_path, "w", buffering=1) as fh:
         fh.write(f"# csi_mac capture label={label} ts={ts}\n")
         try:
-            for line in line_source(args):
+            for item in line_source(args):
+                if isinstance(item, tuple):
+                    line, _source_id = item
+                else:
+                    line = item
                 if time.time() - t0 >= args.seconds:
                     break
                 if not line:
@@ -391,15 +463,17 @@ def cmd_capture(args) -> int:
 # ============================================================
 # Modalita': calibrate (baseline + movement + analyze)
 # ============================================================
-def _drain_buffer(it: Iterator[str], timeout: float = 3.0):
+def _drain_buffer(it, timeout: float = 3.0):
     """Consuma e scarta linee dal buffer seriale per 'timeout' secondi."""
     t_end = time.time() + timeout
-    for line in it:
+    for item in it:
+        # item può essere str (per retrocompat) o (str, source_id) tuple
+        line = item if isinstance(item, str) else item[0]
         if time.time() >= t_end:
             break
 
 
-def _collect_frames(it: Iterator[str], seconds: int, label: str) -> list[dict]:
+def _collect_frames(it, seconds: int, label: str) -> list[dict]:
     print(f"\n  Raccolta '{label}' — {seconds}s")
     print(f"  {'MUOVITI' if label == 'movement' else 'RIMANI FERMO'}.\n")
     frames: list[dict] = []
@@ -409,15 +483,22 @@ def _collect_frames(it: Iterator[str], seconds: int, label: str) -> list[dict]:
 
     t0 = time.time()
     last_report = 0.0
-    for line in it:
+    for item in it:
         now = time.time()
         if now - t0 >= seconds:
             break
+        # Supporta sia str (retrocompat) che tuple (line, source_id)
+        if isinstance(item, tuple):
+            line, source_id = item
+        else:
+            line, source_id = item, None
         if not line.startswith("CSI:"):
             continue
         parsed = parse_csi_line(line)
         if not parsed:
             continue
+        if source_id is not None:
+            parsed["source_id"] = source_id
         parsed["_t"] = round(now - t0, 3)
         parsed["_label"] = label
         frames.append(parsed)
@@ -669,6 +750,10 @@ def main() -> int:
     ap.add_argument("--baud", type=int, default=DEFAULT_BAUD)
     ap.add_argument("--ble", action="store_true",
                     help="Usa BLE invece di seriale (ESP32 BLE firmware)")
+    ap.add_argument("--multi-rx", type=str, default=None,
+                    help="Multi-ricevitore: porte separate da virgola (es. /dev/ttyUSB0,/dev/ttyUSB1)")
+    ap.add_argument("--ap-mode", action="store_true",
+                    help="ESP32 in AP mode (3 PC si connettono direttamente)")
 
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--monitor", action="store_true",
