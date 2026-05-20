@@ -312,10 +312,15 @@ def _prefix_from_value(value: str, source_key: str) -> str:
 
 
 def _generate_source_feature_names(values: list[str], source_key: str = "mac") -> list[str]:
-    """Genera feature names per modello con per-source + fase.
+    """Genera feature names per modello con per-source + fase + RSSI.
 
     Include feature globali + per ogni sorgente:
-    sub_mean_0..N-1, sub_std_0..N-1, phase_mean_0..N-1, phase_std_0..N-1.
+      rssi_mean, rssi_weight,
+      sub_mean_0..N-1, sub_std_0..N-1,
+      phase_mean_0..N-1, phase_std_0..N-1.
+
+    RSSI_weight = 1/(|rssi|+1): peso alto = nodo vicino = più affidabile.
+    Il Random Forest impara a fidarsi di più delle sorgenti con RSSI alto.
 
     Args:
         values: lista di valori sorgente (MAC address o source_id).
@@ -327,6 +332,9 @@ def _generate_source_feature_names(values: list[str], source_key: str = "mac") -
     names = list(GLOBAL_FEATURE_NAMES)
     for val in values:
         prefix = _prefix_from_value(val, source_key)
+        # RSSI features (ispirato da RuView: RSSI-weighted fusion)
+        names.append(f"{prefix}_rssi_mean")
+        names.append(f"{prefix}_rssi_weight")
         for i in range(NUM_CSI_SUBCARRIERS):
             names.append(f"{prefix}_{SUB_MEAN_PREFIX}{i}")
             names.append(f"{prefix}_{SUB_STD_PREFIX}{i}")
@@ -341,10 +349,14 @@ _generate_position_feature_names = lambda macs: _generate_source_feature_names(m
 
 def extract_csi_profile_per_source(frames_window: list, known_sources: list[str],
                                     source_key: str = "mac") -> dict:
-    """Estrae feature per-sorgente con fase + feature globali.
+    """Estrae feature per-sorgente con fase + RSSI + feature globali.
 
     Per ogni known_source, estrae profilo ampl_mean/ampl_std/phase_mean/phase_std
-    dai soli frame di quella sorgente nella finestra.
+    e RSSI_mean/RSSI_weight dai soli frame di quella sorgente nella finestra.
+
+    RSSI_weight = 1/(|RSSI_mean|+1): peso alto = nodo vicino.
+    Il modello impara a fidarsi più delle sorgenti con RSSI alto
+    (ispirato da RuView: cross-node RSSI-weighted feature fusion).
 
     Args:
         frames_window: Lista di dict CSI.
@@ -361,6 +373,16 @@ def extract_csi_profile_per_source(frames_window: list, known_sources: list[str]
     for val in known_sources:
         sp = _extract_source_profile(frames_window, source_key, val)
         prefix = _prefix_from_value(val, source_key)
+
+        # Calcola RSSI medio per questa sorgente
+        src_frames = [f for f in frames_window
+                      if isinstance(f, dict) and f.get(source_key) == val]
+        rssi_vals = [f.get("rssi", -90) for f in src_frames if isinstance(f, dict)]
+        rssi_mean_v = mean(rssi_vals) if rssi_vals else -90.0
+        rssi_weight = round(1.0 / (abs(rssi_mean_v) + 1.0), 4)
+
+        profile[f"{prefix}_rssi_mean"] = round(rssi_mean_v, 2)
+        profile[f"{prefix}_rssi_weight"] = rssi_weight
 
         if sp is None:
             for i in range(NUM_CSI_SUBCARRIERS):
@@ -749,10 +771,12 @@ class CSIClassifier:
             raise RuntimeError("joblib non installato (pip install joblib)")
 
         _joblib.dump(self._model, path)
+        n_feat_names = len(self._custom_feature_names) if self._custom_feature_names else 0
         meta = {
             "class_labels": self._class_labels,
             "known_sources": self._known_sources,
             "source_key": self._source_key,
+            "n_features": self._model.n_features_in_ if hasattr(self._model, 'n_features_in_') else n_feat_names,
         }
         with open(labels_path, "w") as f:
             json.dump(meta, f)
@@ -788,9 +812,33 @@ class CSIClassifier:
             self._source_key = data.get("source_key", "mac")
 
         if self._known_sources and len(self._known_sources) >= 2:
-            self._custom_feature_names = _generate_source_feature_names(
+            # Genera feature names; se non matchano n_features del modello,
+            # riprova senza RSSI (retrocompat modelli salvati prima delle RSSI feature).
+            candidate_names = _generate_source_feature_names(
                 self._known_sources, self._source_key
             )
+            expected_n = len(candidate_names)
+            model_n = self._model.n_features_in_ if hasattr(self._model, 'n_features_in_') else expected_n
+
+            if expected_n == model_n:
+                self._custom_feature_names = candidate_names
+            else:
+                # Retrocompat: modello vecchio (senza RSSI features)
+                _old_source_feature_names = lambda vals, sk: (
+                    list(GLOBAL_FEATURE_NAMES) + [
+                        f"{_prefix_from_value(v, sk)}_{pfx}{i}"
+                        for v in vals
+                        for pfx in [SUB_MEAN_PREFIX, SUB_STD_PREFIX,
+                                    SUB_PHASE_MEAN_PREFIX, SUB_PHASE_STD_PREFIX]
+                        for i in range(NUM_CSI_SUBCARRIERS)
+                    ]
+                )
+                old_names = _old_source_feature_names(self._known_sources, self._source_key)
+                if len(old_names) == model_n:
+                    self._custom_feature_names = old_names
+                    print(f"  [Posizioni] Feature names retrocompat (senza RSSI): {len(old_names)} feat")
+                else:
+                    self._custom_feature_names = candidate_names
         else:
             self._custom_feature_names = []
 
