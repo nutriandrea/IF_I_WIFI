@@ -35,6 +35,16 @@
 // ============================================================
 #include "secrets.h"
 
+// Modalità AP: scommenta per far diventare ESP32 un access point.
+// I PC si connettono direttamente all'ESP32 e lo pingano.
+// Utile per demo: ogni PC ha MAC diverso nel CSI.
+// #define CSI_AP_MODE
+#ifdef CSI_AP_MODE
+#define AP_SSID "ESP32-CSI"
+#define AP_PASS "csi12345"
+#define AP_IP 192, 168, 4, 1
+#endif
+
 // Supporto multi-AP: se NUM_APS > 1, il firmware cicla tra AP_LIST
 #ifndef NUM_APS
 #define NUM_APS 1
@@ -243,12 +253,25 @@ void setup() {
     delay(500);
 
     // Avvia WiFi NON bloccante — loop() risponde subito ai comandi
+#ifdef CSI_AP_MODE
+    WiFi.mode(WIFI_AP);
+    IPAddress local_ip(AP_IP);
+    IPAddress gateway(AP_IP);
+    IPAddress subnet(255, 255, 255, 0);
+    WiFi.softAPConfig(local_ip, gateway, subnet);
+    WiFi.softAP(AP_SSID, AP_PASS);
+    Serial.print("WiFi:AP_IP=");
+    Serial.print(WiFi.softAPIP());
+    Serial.print(" ssid=");
+    Serial.println(AP_SSID);
+#else
     Serial.print("WiFi:connecting...");
     WiFi.mode(WIFI_STA);
     // Riduce la potenza TX per stare nei limiti USB (8.5dBm ≈ 7mW).
     // Range tipico in casa: ancora sufficiente per stare connessi all'AP.
     WiFi.setTxPower(WIFI_POWER_8_5dBm);
     WiFi.begin(AP_CREDS[current_ap].ssid, AP_CREDS[current_ap].pass);
+#endif
 }
 
 void loop() {
