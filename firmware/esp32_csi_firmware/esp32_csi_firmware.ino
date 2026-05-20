@@ -26,6 +26,7 @@
  */
 
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include "esp_wifi.h"
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
@@ -75,6 +76,22 @@ static unsigned long ap_stream_start = 0;
 #define CSI_MAX_SUBCARRIERS 128  // sufficiente per HT40
 
 #define LED_PIN          2  // ESP32 built-in LED
+
+// === UDP streaming (ispirato da RuView ADR-018) ===
+#define UDP_TARGET_PORT  5005
+#define UDP_FRAME_MAGIC  0xC5110001   // ADR-018 magic number
+#define UDP_HEADER_SIZE  20
+#define UDP_MAX_FRAME    (UDP_HEADER_SIZE + CSI_MAX_SUBCARRIERS * 2)
+#define MAX_OUTPUT_HZ    50
+#define MIN_OUTPUT_INTERVAL_US (1000000 / MAX_OUTPUT_HZ)
+
+static WiFiUDP udp_client;
+static IPAddress udp_target_ip(192, 168, 1, 100);  // default, sovrascrivibile via comando
+static bool udp_ready = false;
+
+enum OutputMode { OUT_SERIAL, OUT_UDP };
+static OutputMode out_mode = OUT_SERIAL;  // default serial (retrocompat)
+static unsigned long last_output_us = 0;
 
 // ============================================================
 // Struttura frame CSI
@@ -164,7 +181,13 @@ static void handle_commands() {
         Serial.print(",dropped=");
         Serial.print(csi_dropped);
         Serial.print(",heap=");
-        Serial.println(ESP.getFreeHeap());
+        Serial.print(ESP.getFreeHeap());
+        Serial.print(",out=");
+        Serial.print(out_mode == OUT_UDP ? "udp" : "serial");
+        Serial.print(",rate=");
+        Serial.print(MAX_OUTPUT_HZ);
+        Serial.print("hz,streaming=");
+        Serial.println(streaming ? "ON" : "OFF");
     } else if (cmd == "start") {
         streaming = true;
         Serial.println("start:OK");
@@ -173,6 +196,35 @@ static void handle_commands() {
         streaming = false;
         Serial.println("stop:OK");
         digitalWrite(LED_PIN, LOW);
+    } else if (cmd.startsWith("$ serial")) {
+        out_mode = OUT_SERIAL;
+        Serial.println("out:serial");
+    } else if (cmd.startsWith("$ udp")) {
+        if (WiFi.status() != WL_CONNECTED
+            #ifdef CSI_AP_MODE
+            && WiFi.softAPgetStationNum() == 0
+            #endif
+        ) {
+            Serial.println("out:udp_no_wifi");
+            return;
+        }
+        String ip = cmd.substring(5);
+        ip.trim();
+        if (ip.length() > 0) {
+            udp_target_ip.fromString(ip);
+        }
+        if (!udp_ready) {
+            udp_client.begin(UDP_TARGET_PORT);
+            udp_ready = true;
+        }
+        out_mode = OUT_UDP;
+        Serial.print("out:udp ");
+        Serial.println(udp_target_ip);
+    } else if (cmd.startsWith("$ rate ")) {
+        // Nota: rate limit è compile-time via MAX_OUTPUT_HZ
+        Serial.print("rate:");
+        Serial.print(MAX_OUTPUT_HZ);
+        Serial.println("hz");
     }
 }
 
@@ -184,11 +236,8 @@ static void print_mac(const uint8_t *mac) {
     }
 }
 
-// === Output frame CSI su Serial ===
-static void output_frames() {
-    if (csi_tail == csi_head) return;
-
-    csi_slot_t *slot = &csi_slots[csi_tail];
+// === Output frame seriale (formato testo, retrocompatibile) ===
+static void output_frame_serial(csi_slot_t *slot) {
     int sub_count = slot->len / 2;
 
     Serial.print("CSI:");
@@ -211,6 +260,72 @@ static void output_frames() {
         Serial.print(slot->data[i]);
     }
     Serial.println();
+}
+
+// === Output frame UDP (formato binario ADR-018) ===
+// Layout:
+//   [0..3]   Magic: 0xC5110001 (LE u32)
+//   [4]      Node ID (0-255)
+//   [5]      Numero antenne
+//   [6..7]   Numero subcarrier (LE u16)
+//   [8..11]  Frequenza MHz (LE u32)
+//   [12..15] Sequence number (LE u32)
+//   [16]     RSSI (i8)
+//   [17]     Noise floor (i8)
+//   [18..19] Reserved (zero)
+//   [20..]   I/Q pairs (int8_t, per-subcarrier)
+static void output_frame_udp(csi_slot_t *slot) {
+    if (!udp_ready) return;
+
+    uint8_t buf[UDP_MAX_FRAME];
+    uint16_t n_sub = slot->len / 2;
+    size_t frame_size = UDP_HEADER_SIZE + slot->len;
+    if (frame_size > UDP_MAX_FRAME) frame_size = UDP_MAX_FRAME;
+
+    // Magic
+    uint32_t magic = UDP_FRAME_MAGIC;
+    memcpy(&buf[0], &magic, 4);
+    // Node ID
+    buf[4] = 0;
+    // Numero antenne
+    buf[5] = 1;
+    // Numero subcarrier
+    memcpy(&buf[6], &n_sub, 2);
+    // Frequenza (default 2412 MHz)
+    uint32_t freq = 2412;
+    memcpy(&buf[8], &freq, 4);
+    // Sequence number
+    memcpy(&buf[12], &slot->seq, 4);
+    // RSSI / Noise floor
+    buf[16] = (uint8_t)(int8_t)slot->rssi;
+    buf[17] = (uint8_t)(int8_t)slot->noise_floor;
+    // Reserved
+    buf[18] = 0;
+    buf[19] = 0;
+    // I/Q data
+    memcpy(&buf[UDP_HEADER_SIZE], slot->data, slot->len);
+
+    udp_client.beginPacket(udp_target_ip, UDP_TARGET_PORT);
+    udp_client.write(buf, frame_size);
+    udp_client.endPacket();
+}
+
+// === Output con rate limiting + dispatch mode ===
+static void drain_output() {
+    if (csi_tail == csi_head) return;
+
+    // Rate limiting: max MAX_OUTPUT_HZ frames/sec
+    unsigned long now = micros();
+    if (now - last_output_us < MIN_OUTPUT_INTERVAL_US) return;
+    last_output_us = now;
+
+    csi_slot_t *slot = &csi_slots[csi_tail];
+
+    if (out_mode == OUT_UDP) {
+        output_frame_udp(slot);
+    } else {
+        output_frame_serial(slot);
+    }
 
     csi_tail = (csi_tail + 1) % CSI_QUEUE_SLOTS;
 }
@@ -324,7 +439,7 @@ void loop() {
 
     // Output CSI solo quando inizializzato
     if (csi_initialized) {
-        output_frames();
+        drain_output();
 
         // Multi-AP: switch al prossimo AP dopo AP_CAPTURE_SECONDS
         if (NUM_APS > 1) {
