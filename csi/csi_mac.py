@@ -27,6 +27,7 @@ Dipendenze: pip install pyserial
 
 from __future__ import annotations
 import argparse
+import asyncio
 import glob
 import json
 import os
@@ -40,6 +41,16 @@ from pathlib import Path
 from statistics import mean, stdev
 from typing import Iterator, Optional
 from queue import Queue
+
+# WebSocket — opzionale (solo se --ws-port specificato)
+_HAVE_WS = False
+_ws_clients: set = set()
+_ws_server = None
+try:
+    import websockets
+    _HAVE_WS = True
+except ImportError:
+    pass
 
 try:
     import serial
@@ -267,6 +278,72 @@ def _dict_to_csi_line(d: dict) -> str:
 
 
 # ============================================================
+# WebSocket helper per broadcast heatmap al browser
+# ============================================================
+# Usa websockets in un thread separato. Le connessioni client
+# sono accettate in un loop asincrono live su event loop dedicato.
+
+_ws_loop: asyncio.AbstractEventLoop | None = None
+_ws_stop = False
+
+
+async def _ws_handler(ws):
+    """Handler connessione WebSocket — tiene traccia dei client."""
+    global _ws_clients
+    _ws_clients.add(ws)
+    # Invia ACK di benvenuto
+    try:
+        await ws.send(json.dumps({"type": "hello", "version": 1}))
+        async for _ in ws:
+            pass  # ignora messaggi in arrivo
+    except Exception:
+        pass
+    finally:
+        _ws_clients.discard(ws)
+
+
+async def _ws_broadcast_raw(msg: dict):
+    """Invia messaggio JSON a tutti i client connessi."""
+    global _ws_clients
+    dead = set()
+    payload = json.dumps(msg)
+    for ws in _ws_clients.copy():
+        try:
+            await ws.send(payload)
+        except Exception:
+            dead.add(ws)
+    _ws_clients -= dead
+
+
+def _ws_broadcast_frame(msg: dict):
+    """Thread-safe broadcast: programma l'invio sul loop asincrono."""
+    global _ws_loop
+    if _ws_loop is not None and not _ws_loop.is_closed():
+        asyncio.run_coroutine_threadsafe(_ws_broadcast_raw(msg), _ws_loop)
+
+
+async def _ws_server_task(port: int):
+    """Task asincrono del server WebSocket."""
+    global _ws_loop, _ws_stop, _ws_server, _HAVE_WS
+    if not _HAVE_WS:
+        return
+    import websockets as _ws_mod
+    _ws_loop = asyncio.get_running_loop()
+    print(f"  WebSocket server su ws://0.0.0.0:{port}", file=sys.stderr)
+    async with _ws_mod.serve(_ws_handler, "0.0.0.0", port):
+        while not _ws_stop:
+            await asyncio.sleep(0.5)
+
+
+def _ws_start_server(port: int):
+    """Avvia server WebSocket in un thread demonio."""
+    def _run():
+        asyncio.run(_ws_server_task(port))
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+
+# ============================================================
 # Modalita': monitor live
 # ============================================================
 def cmd_monitor(args) -> int:
@@ -346,6 +423,17 @@ def cmd_monitor(args) -> int:
             print(f"  Heatmap non disponibile: {e}", file=sys.stderr)
             heatmap_enabled = False
 
+    # Inizializza PhaseBreathingEstimator se --vitals attivo
+    phase_breathing = None
+    if args.vitals and use_ml:
+        from .csi_ml import PhaseBreathingEstimator
+        phase_breathing = PhaseBreathingEstimator(window_seconds=10.0, sample_rate=30.0)
+        print(f"  Vitals: respirazione da fase CSI attivata.", file=sys.stderr)
+
+    # Avvia WebSocket server in background
+    if args.ws_port and _HAVE_WS:
+        _ws_start_server(args.ws_port)
+
     if not use_ml:
         det = CSIDetector(
             window_size=args.window,
@@ -423,6 +511,22 @@ def cmd_monitor(args) -> int:
                 probas = ml_clf.predict_proba()
                 cls = ml_clf.predict()
 
+                # Feed fase a PhaseBreathingEstimator
+                if phase_breathing is not None:
+                    phase_breathing.add_frame(parsed)
+
+                # WebSocket broadcast
+                if args.ws_port and _HAVE_WS and _ws_clients:
+                    _ws_broadcast_frame({
+                        "type": "position",
+                        "t": round(time.time() - t0, 3),
+                        "class": cls,
+                        "probas": probas,
+                        "rssi": parsed.get("rssi", 0),
+                        "source_id": parsed.get("source_id", None),
+                        "mac": parsed.get("mac", ""),
+                    })
+
                 # Aggiorna heatmap matplotlib se attiva
                 hm_im = track_heatmap["im"]
                 hm_plt = track_heatmap["plt"]
@@ -463,6 +567,16 @@ def cmd_monitor(args) -> int:
                               f"{probas.get('MOVEMENT', 0):>7.3f} "
                               f"{cls:>12}",
                               flush=True)
+
+                    # WebSocket vitals broadcast (periodico)
+                    if phase_breathing is not None and seen % args.print_every == 0:
+                        vitals = phase_breathing.estimate()
+                        if vitals.get("bpm", 0) > 0 and _ws_clients:
+                            _ws_broadcast_frame({
+                                "type": "vitals",
+                                "t": round(time.time() - t0, 3),
+                                **vitals,
+                            })
             else:
                 assert det is not None
                 presence, info = det.update(parsed)
@@ -833,6 +947,10 @@ def main() -> int:
                      help="ESP32 in AP mode (3 PC si connettono direttamente)")
     ap.add_argument("--udp-port", type=int, default=None,
                      help="Porta UDP per ricevere frame ESP32 (evita crash USB su ESP32-S3)")
+    ap.add_argument("--ws-port", type=int, default=None,
+                     help="WebSocket port per broadcast heatmap al browser (default: nessun WS)")
+    ap.add_argument("--vitals", action="store_true",
+                     help="Abilita stima BPM (respirazione) da fase CSI (richiede --use-ml)")
 
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--monitor", action="store_true",

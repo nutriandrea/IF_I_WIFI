@@ -315,6 +315,26 @@
         <span class="val" id="numAps">3</span>
       </div>
     </div>
+
+    <!-- Vitals Card -->
+    <div class="card" id="vitalsCard" style="display:none;">
+      <h3>💓 Respiro (WiFi)</h3>
+      <div class="stat-row">
+        <span class="lbl">BPM</span>
+        <span class="val" id="bpmVal">—</span>
+      </div>
+      <div class="stat-row">
+        <span class="lbl">Confidenza</span>
+        <span class="val" id="bpmConf">—</span>
+      </div>
+      <div class="conf-bar-wrap">
+        <div class="conf-bar" id="bpmBar"></div>
+      </div>
+      <div class="stat-row">
+        <span class="lbl">Subcarrier</span>
+        <span class="val" id="bpmSub">—</span>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -339,6 +359,7 @@ const state = {
   apId: 0,
   fps: 0, _fc: 0, _fts: 0,
   lastUpdate: 0,
+  vitals: { bpm: 0, confidence: 0, n_subcarriers: 0 },
   rows: 5,                 // default, sovrascritto da URL params
   cols: 4,
 };
@@ -464,8 +485,14 @@ function updateHUD(result) {
     rssiVal.className = 'val' + (rssi > -60 ? ' high' : rssi > -75 ? ' mid' : ' low');
   }
 
-  // AP
-  apVal.textContent = result.ap_id !== undefined ? `AP ${result.ap_id + 1}` : '—';
+  // AP — supporta sia ap_id che source_id
+  if (result.ap_id !== undefined) {
+    apVal.textContent = `AP ${result.ap_id + 1}`;
+  } else if (result.source_id !== undefined) {
+    apVal.textContent = `${result.source_id}`;
+  } else {
+    apVal.textContent = '—';
+  }
 
   // Tempo
   if (result.timestamp) {
@@ -516,6 +543,10 @@ function connectWS() {
       const data = JSON.parse(event.data);
       if (data.type === 'seat_prediction') {
         onPrediction(data);
+      } else if (data.type === 'vitals') {
+        onVitals(data);
+      } else if (data.type === 'position') {
+        onPosition(data);
       }
     } catch (e) {
       // ignora
@@ -569,6 +600,47 @@ function onPrediction(result) {
   updateSeat(state.prediction, state.probabilities);
   updateProbas(state.probabilities);
   updateHUD(result);
+  updateFps();
+}
+
+// ============================================================
+// Vitals (respirazione da fase CSI)
+// ============================================================
+function onVitals(data) {
+  state.vitals = data;
+  const card = document.getElementById('vitalsCard');
+  card.style.display = 'block';
+
+  const bpm = data.bpm || 0;
+  const conf = data.confidence || 0;
+  const subs = data.n_subcarriers || 0;
+
+  document.getElementById('bpmVal').textContent = bpm > 0 ? `${bpm} BPM` : '—';
+  document.getElementById('bpmVal').className = bpm > 0
+    ? (bpm >= 6 && bpm <= 30 ? 'val high' : 'val mid')
+    : 'val';
+
+  document.getElementById('bpmConf').textContent = conf > 0 ? `${(conf * 100).toFixed(0)}%` : '—';
+  const bar = document.getElementById('bpmBar');
+  bar.style.width = `${(conf * 100).toFixed(0)}%`;
+  bar.className = conf > 0.6 ? 'conf-bar' : (conf > 0.3 ? 'conf-bar mid' : 'conf-bar low');
+
+  document.getElementById('bpmSub').textContent = subs > 0 ? `${subs}` : '—';
+}
+
+// ============================================================
+// Position (da modello ML)
+// ============================================================
+function onPosition(data) {
+  state.prediction = data.class || 'EMPTY';
+  state.confidence = data.probas ? Math.max(...Object.values(data.probas)) : 0;
+  state.probabilities = data.probas || {};
+  state.rssi = data.rssi || 0;
+  state.lastUpdate = data.t || Date.now() / 1000;
+
+  updateSeat(state.prediction, state.probabilities);
+  updateProbas(state.probabilities);
+  updateHUD(data);
   updateFps();
 }
 
