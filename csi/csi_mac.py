@@ -63,11 +63,12 @@ from .csi_processor import parse_csi_line, parse_csi_binary, CSIDetector
 
 # CSI ML Classifier: import lazy
 try:
-    from .csi_ml import CSIClassifier, CSI_MODEL_PATH
+    from .csi_ml import CSIClassifier, CSI_MODEL_PATH, MultiAPCSIClassifier
     from .csi_ml import POSITIONS_MODEL_PATH, POSITIONS_LABELS_PATH
     _CSI_ML_AVAILABLE = True
 except Exception:
     CSIClassifier = None
+    MultiAPCSIClassifier = None
     CSI_MODEL_PATH = None
     _CSI_ML_AVAILABLE = False
 
@@ -367,12 +368,11 @@ def cmd_monitor(args) -> int:
             use_ml = False
         else:
             assert CSIClassifier is not None
-            if args.num_aps > 1:
-                ml_clf = MultiAPCSIClassifier(window_frames=30, num_aps=args.num_aps)
-            else:
-                ml_clf = CSIClassifier(window_frames=args.window)
-            # Prova modello posizioni prima, poi standard
-            if ml_clf.load_custom():
+            # Prova modello posizioni prima (usa CSIClassifier single-source,
+            # che funziona anche con --num-aps > 1 perché addestrato su frame aggregati)
+            _pos_clf = CSIClassifier(window_frames=args.window)
+            if _pos_clf.load_custom():
+                ml_clf = _pos_clf
                 print(f"  Modello posizioni caricato.", file=sys.stderr)
                 # Verifica se è modello griglia per heatmap
                 labels = ml_clf._class_labels or []
@@ -382,6 +382,11 @@ def cmd_monitor(args) -> int:
                         print(f"  Heatmap griglia {grid_rows}x{grid_cols} attivata.",
                               file=sys.stderr)
             else:
+                # Nessun modello posizioni: usa MultiAP o standard
+                if args.num_aps > 1:
+                    ml_clf = MultiAPCSIClassifier(window_frames=30, num_aps=args.num_aps)
+                else:
+                    ml_clf = CSIClassifier(window_frames=args.window)
                 model_file = args.ml_model or CSI_MODEL_PATH
                 if model_file and os.path.exists(model_file):
                     ml_clf.load(model_file)

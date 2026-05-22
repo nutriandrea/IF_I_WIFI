@@ -1046,6 +1046,9 @@ class MultiAPCSIClassifier:
         self._model = None
         self._trained = False
         self._total_feature_size = CSI_FEATURE_SIZE * num_aps
+        self._class_labels: list[str] | None = None  # label personalizzate (posizioni)
+        self._known_sources: list[str] = []
+        self._source_key: str = "mac"
 
     # ---- Properties ----
 

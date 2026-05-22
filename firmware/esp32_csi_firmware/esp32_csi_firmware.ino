@@ -43,7 +43,7 @@
 #ifdef CSI_AP_MODE
 #define AP_SSID "ESP32-CSI"
 #define AP_PASS "csi12345"
-#define AP_IP 192, 168, 4, 1
+#define AP_IP 192, 168, 4, 2
 #endif
 
 // ============================================================
@@ -51,12 +51,12 @@
 // ============================================================
 // NODE_ID: identificativo univoco (0, 1, 2, ...).
 // Usato nel header UDP (buf[4]) per distinguere le schede.
-#define NODE_ID 0
+#define NODE_ID 1
 
 // UDP auto-start: invia frame UDP all'UNO Q non appena connesso al WiFi.
 // Imposta UDP_TARGET_HOST con l'IP dell'UNO Q e metti true.
-#define UDP_AUTO_START false
-// #define UDP_TARGET_HOST "192.168.4.100"  // IP dell'UNO Q
+#define UDP_AUTO_START true
+ #define UDP_TARGET_HOST "10.12.124.109"  // IP dell'UNO Q
 
 // Supporto multi-AP: se NUM_APS > 1, il firmware cicla tra AP_LIST
 #ifndef NUM_APS
