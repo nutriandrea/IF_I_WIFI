@@ -34,6 +34,7 @@ import os
 import signal
 import socket
 import sys
+from csi import csi_processor as _cp
 import threading
 import time
 from datetime import datetime
@@ -249,6 +250,9 @@ def _udp_source(port: int) -> Iterator[tuple[str, str | None]]:
             if magic == 0xC5110001:
                 parsed = parse_csi_binary(data)
                 if parsed:
+                    # Imposta il contesto AP per il parser a valle
+                    node_id = parsed.get("_node_id", 0)
+                    _cp._AP_CONTEXT = node_id
                     yield (_dict_to_csi_line(parsed), None)
                     continue
 

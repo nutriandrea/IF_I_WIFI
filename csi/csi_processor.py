@@ -350,6 +350,7 @@ def parse_csi_binary(data: bytes) -> dict | None:
         "ampl_std": round(stdev(amps), 3) if len(amps) >= 2 else 0,
         "ampl_max": round(max(amps), 3),
         "ampl_min": round(min(amps), 3),
+        "ap_id": node_id,  # per compatibilità MultiAPCSIClassifier
         "_binary": True,
         "_node_id": node_id,
         "_n_antennas": n_antennas,

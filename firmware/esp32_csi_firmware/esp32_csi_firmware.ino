@@ -46,6 +46,18 @@
 #define AP_IP 192, 168, 4, 1
 #endif
 
+// ============================================================
+// CONFIG PER-BOARD — cambia NODE_ID per ogni ESP32
+// ============================================================
+// NODE_ID: identificativo univoco (0, 1, 2, ...).
+// Usato nel header UDP (buf[4]) per distinguere le schede.
+#define NODE_ID 0
+
+// UDP auto-start: invia frame UDP all'UNO Q non appena connesso al WiFi.
+// Imposta UDP_TARGET_HOST con l'IP dell'UNO Q e metti true.
+#define UDP_AUTO_START false
+// #define UDP_TARGET_HOST "192.168.4.100"  // IP dell'UNO Q
+
 // Supporto multi-AP: se NUM_APS > 1, il firmware cicla tra AP_LIST
 #ifndef NUM_APS
 #define NUM_APS 1
@@ -286,7 +298,7 @@ static void output_frame_udp(csi_slot_t *slot) {
     uint32_t magic = UDP_FRAME_MAGIC;
     memcpy(&buf[0], &magic, 4);
     // Node ID
-    buf[4] = 0;
+    buf[4] = NODE_ID;
     // Numero antenne
     buf[5] = 1;
     // Numero subcarrier
@@ -431,6 +443,20 @@ void loop() {
                 } else {
                     Serial.println("CSI:FAILED");
                 }
+
+                // UDP auto-start: se abilitato, passa direttamente in UDP
+                #if defined(UDP_AUTO_START) && UDP_AUTO_START
+                    #ifdef UDP_TARGET_HOST
+                    udp_target_ip.fromString(UDP_TARGET_HOST);
+                    udp_client.begin(UDP_TARGET_PORT);
+                    udp_ready = true;
+                    out_mode = OUT_UDP;
+                    Serial.print("UDP:auto ");
+                    Serial.println(UDP_TARGET_HOST);
+                    #else
+                    Serial.println("UDP:ERR (definisci UDP_TARGET_HOST)");
+                    #endif
+                #endif
             } else {
                 Serial.print(".");
             }
