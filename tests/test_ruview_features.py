@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-test_ruview_features.py — Test per le 3 feature importate da RuView:
+test_ruview_features.py — Test per feature importate da RuView:
   1. PhaseSanitizer (unwrap, outlier removal, smoothing)
   2. RSSIFeatureExtractor (CUSUM, FFT bands, time-domain)
-  3. RuleBasedClassifier (ternario ABSENT/STILL/ACTIVE)
+
 """
 
 import sys
@@ -16,7 +16,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from csi.phase_sanitizer import PhaseSanitizer
 from csi.csi_ml import (
     RSSIFeatureExtractor, RSSIFeatures, RSSI_FEATURE_NAMES,
-    RuleBasedClassifier, RuleBasedResult,
     DopplerShiftExtractor, DOPPLER_FEATURE_NAMES,
     SleepQualityAnalyzer, SLEEP_FEATURE_NAMES,
 )
@@ -203,78 +202,6 @@ def test_rssi_features_dataclass():
 
 
 # ============================================================
-# 3. RuleBasedClassifier
-# ============================================================
-
-def test_rule_classifier_empty():
-    """RuleBasedClassifier rileva EMPTY con varianza bassa."""
-    clf = RuleBasedClassifier(presence_variance_threshold=0.5)
-    feats = RSSIFeatures()
-    feats.variance = 0.1
-    feats.motion_band_power = 0.01
-    result = clf.classify(feats)
-    assert result.label == "EMPTY"
-    assert not result.presence_detected
-    log("Rule classifier EMPTY", True)
-
-
-def test_rule_classifier_stationary():
-    """RuleBasedClassifier rileva STATIONARY con varianza alta ma motion basso."""
-    clf = RuleBasedClassifier(presence_variance_threshold=0.5, motion_energy_threshold=0.1)
-    feats = RSSIFeatures()
-    feats.variance = 2.0      # > 0.5 → presence
-    feats.motion_band_power = 0.02  # < 0.1 → NOT active
-    result = clf.classify(feats)
-    assert result.label == "STATIONARY"
-    assert result.presence_detected
-    log("Rule classifier STATIONARY", True)
-
-
-def test_rule_classifier_movement():
-    """RuleBasedClassifier rileva MOVEMENT con varianza alta e motion alto."""
-    clf = RuleBasedClassifier(presence_variance_threshold=0.5, motion_energy_threshold=0.1)
-    feats = RSSIFeatures()
-    feats.variance = 5.0
-    feats.motion_band_power = 0.8
-    result = clf.classify(feats)
-    assert result.label == "MOVEMENT"
-    assert result.presence_detected
-    log("Rule classifier MOVEMENT", True)
-
-
-def test_rule_classifier_confidence():
-    """RuleBasedClassifier confidence è in [0,1] per tutti i casi."""
-    clf = RuleBasedClassifier()
-    for var, motion, breathing in [(0.1, 0.01, 0.01), (2.0, 0.02, 0.3), (5.0, 1.0, 0.5)]:
-        feats = RSSIFeatures()
-        feats.variance = var
-        feats.motion_band_power = motion
-        feats.breathing_band_power = breathing
-        result = clf.classify(feats)
-        assert 0.0 <= result.confidence <= 1.0, \
-            f"Confidence {result.confidence} fuori range per var={var}"
-    log("Rule classifier confidence range", True)
-
-
-def test_rule_classifier_kwargs():
-    """RuleBasedClassifier.classify() accetta kwargs senza RSSIFeatures."""
-    clf = RuleBasedClassifier()
-    result = clf.classify(variance=3.0, motion_band_power=0.8)
-    assert result.label == "MOVEMENT"
-    assert result.presence_detected
-    log("Rule classifier kwargs", True)
-
-
-def test_rule_result_to_dict():
-    """RuleBasedResult.to_dict() funziona."""
-    r = RuleBasedResult(label="EMPTY", confidence=0.9)
-    d = r.to_dict()
-    assert d["label"] == "EMPTY"
-    assert d["confidence"] == 0.9
-    log("Rule result to_dict", True)
-
-
-# ============================================================
 # 4. DopplerShiftExtractor
 # ============================================================
 
@@ -458,14 +385,6 @@ if __name__ == "__main__":
     test_rssi_cusum_change_points()
     test_rssi_small_window()
     test_rssi_features_dataclass()
-
-    print("\n--- RuleBasedClassifier ---")
-    test_rule_classifier_empty()
-    test_rule_classifier_stationary()
-    test_rule_classifier_movement()
-    test_rule_classifier_confidence()
-    test_rule_classifier_kwargs()
-    test_rule_result_to_dict()
 
     total = PASS + FAIL
     print(f"\n=== Risultato: {PASS}/{total} passati, {FAIL} falliti ===")

@@ -790,7 +790,7 @@ def cmd_monitor(client, use_ml: bool = False, ml_model_path: str | None = None):
 
     if use_ml:
         print("CSI ML Monitor — Ctrl+C per uscire\n")
-        print(f"{'t(s)':>6} {'RSSI':>6} {'EMPTY':>7} {'STILL':>7} {'MOVE':>7} {'Classe':>14}")
+        print(f"{'t(s)':>6} {'RSSI':>6} {'EMPTY':>7} {'STILL':>7} {'MOTION':>7} {'Classe':>14}")
         print("-" * 55)
     else:
         print("CSI Monitor — Ctrl+C per uscire\n")
@@ -825,8 +825,8 @@ def cmd_monitor(client, use_ml: bool = False, ml_model_path: str | None = None):
                                 print(f"{t:>6.1f} "
                                       f"{parsed.get('rssi', 0):>6} "
                                       f"{probas.get('EMPTY', 0):>7.3f} "
-                                      f"{probas.get('STATIONARY', 0):>7.3f} "
-                                      f"{probas.get('MOVEMENT', 0):>7.3f} "
+                                      f"{probas.get('STILL', 0):>7.3f} "
+                                      f"{probas.get('MOTION', 0):>7.3f} "
                                       f"{cls:>14}")
                             else:
                                 print(f"{t:>8.1f} "
@@ -853,7 +853,7 @@ def cmd_collect(client, seconds, label, out_dir):
 
 
 def cmd_train_csi_ml(client, seconds: int, out_dir: str, stationary_seconds: int = 0):
-    """Raccoglie dati EMPTY + MOVEMENT (opz. STATIONARY) e addestra CSIClassifier."""
+    """Raccoglie dati EMPTY + MOTION (opz. STILL) e addestra CSIClassifier."""
     if not _CSI_ML_AVAILABLE or CSIClassifier is None:
         print("\n  [ML] sklearn non installato. Installa con:")
         print("    UNO Q: sudo apt install python3-sklearn python3-joblib")
@@ -868,13 +868,13 @@ def cmd_train_csi_ml(client, seconds: int, out_dir: str, stationary_seconds: int
     input("\nFase 1/3: STANZA VUOTA (allontanati). Premi INVIO...")
     empty = collect_csi(client, seconds, "baseline", out_dir)
 
-    # Fase 2: STATIONARY (opzionale)
+    # Fase 2: STILL (opzionale)
     stationary = None
     if stationary_seconds > 0:
         input(f"\nFase 2/3: SEDUTO FERMO (respiro normale). Premi INVIO...")
         stationary = collect_csi(client, stationary_seconds, "stationary", out_dir)
 
-    # Fase 3: MOVEMENT
+    # Fase 3: MOTION
     n_phase = "3/4" if stationary else "2/3"
     next_phase = "4/4" if stationary else "3/3"
     input(f"\nFase {next_phase}: CAMMINA NELLA STANZA. Premi INVIO...")
@@ -883,8 +883,8 @@ def cmd_train_csi_ml(client, seconds: int, out_dir: str, stationary_seconds: int
     print(f"\n  Training CSIClassifier...")
     print(f"    EMPTY:      {len(empty)} frame")
     if stationary:
-        print(f"    STATIONARY: {len(stationary)} frame")
-    print(f"    MOVEMENT:   {len(movement)} frame")
+        print(f"    STILL: {len(stationary)} frame")
+    print(f"    MOTION:   {len(movement)} frame")
 
     try:
         clf = CSIClassifier(window_frames=30)
@@ -970,7 +970,7 @@ def main():
     parser.add_argument("--ml-model", type=str, default=None,
                         help="Percorso modello CSI .joblib (default: csi_model.joblib)")
     parser.add_argument("--stationary-seconds", type=int, default=0,
-                        help="Secondi per fase STATIONARY (0=salta, default: 0)")
+                        help="Secondi per fase STILL (0=salta, default: 0)")
     args = parser.parse_args()
 
     if args.analyze:
@@ -994,7 +994,7 @@ def main():
             cmd_collect(client, args.seconds, args.benchmark, args.out_dir)
         elif args.calibrate:
             baseline = cmd_collect(client, args.seconds, "baseline", args.out_dir)
-            input("\nPremi INVIO per iniziare la fase MOVEMENT...")
+            input("\nPremi INVIO per iniziare la fase MOTION...")
             movement = cmd_collect(client, args.seconds, "movement", args.out_dir)
             analyze_frames(baseline, movement)
 
@@ -1006,7 +1006,7 @@ def main():
                     assert CSIClassifier is not None
                     stationary = None
                     if args.stationary_seconds > 0:
-                        input(f"\nFase STATIONARY: siediti fermo. Premi INVIO...")
+                        input(f"\nFase STILL: siediti fermo. Premi INVIO...")
                         stationary = cmd_collect(client, args.stationary_seconds, "stationary", args.out_dir)
                     try:
                         clf = CSIClassifier(window_frames=30)

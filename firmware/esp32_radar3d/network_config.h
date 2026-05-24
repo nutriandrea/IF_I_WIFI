@@ -32,7 +32,7 @@ static const uint8_t NODE_MACS[3][6] = {
 // ============================================================
 #include "secrets.h"  // WIFI_SSID, WIFI_PASS
 
-#define UDP_TARGET_IP   "172.20.10.9"    // IP del PC (da ifconfig en0)
+#define UDP_TARGET_IP   "192.168.1.76"    // IP del PC (cambia se la rete e' diversa)
 #define UDP_TARGET_PORT 5005         // stessa porta di run.py (--udp-port 5005 default)
 
 #endif  // NETWORK_CONFIG_H

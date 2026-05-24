@@ -59,7 +59,7 @@ except ImportError:
     sys.exit("Manca pyserial. Installa con:  pip install pyserial")
 
 # Riusa parser e detector esistenti
-from .csi_processor import parse_csi_line, parse_csi_binary, CSIDetector
+from .csi_processor import parse_csi_line, parse_csi_binary, parse_csi_radar3d, CSI_RADAR3D_MAGIC, CSIDetector
 
 # CSI ML Classifier: import lazy
 try:
@@ -245,9 +245,23 @@ def _udp_source(port: int) -> Iterator[tuple[str, str | None]]:
         if not data:
             continue
 
-        # Prova come frame binario ADR-018
+        # Prova come frame binario
         if len(data) >= 4:
             magic = int.from_bytes(data[:4], "little")
+
+            # Radar3D cross-ping (formato attivo, 3× ESP32)
+            if magic == CSI_RADAR3D_MAGIC:
+                parsed = parse_csi_radar3d(data)
+                if parsed:
+                    pair_id = parsed.get("source_id") or parsed.get("mac", "")
+                    # Usa mac_clean = pair_id per compatibilità parse_csi_line.
+                    # Se pair_id non e' esadecimale 12-char, lo passiamo come
+                    # source_id separato e mettiamo mac fittizio.
+                    src = pair_id if pair_id else None
+                    yield (_dict_to_csi_line(parsed, force_mac="ffffffffffff"), src)
+                    continue
+
+            # ADR-018 legacy (vecchio firmware UDP)
             if magic == 0xC5110001:
                 parsed = parse_csi_binary(data)
                 if parsed:
@@ -265,9 +279,8 @@ def _udp_source(port: int) -> Iterator[tuple[str, str | None]]:
             yield (decoded, None)
 
 
-def _dict_to_csi_line(d: dict) -> str:
-    """Converte dict CSI in linea testo CSI:<seq>:<mac>:<rssi>:<noise>:...."""
-    mac = d.get("mac") or "000000000000"
+def _dict_to_csi_line(d: dict, force_mac: str | None = None) -> str:
+    mac = force_mac or d.get("mac") or "000000000000"
     if isinstance(mac, bytes):
         mac = mac.hex()
     csi = d.get("csi", [])
@@ -275,10 +288,13 @@ def _dict_to_csi_line(d: dict) -> str:
     for c in csi:
         iq.append(str(int(c.get("real", 0))))
         iq.append(str(int(c.get("imag", 0))))
+    noise = d.get("noise_floor") or d.get("noise") or 0
+    bw = d.get("bandwidth") or d.get("bw") or 20
+    n_sub = d.get("num_subcarriers") or d.get("n_sub") or len(csi)
     return (f"CSI:{d.get('seq', 0)}:{mac}:"
-            f"{d.get('rssi', 0)}:{d.get('noise_floor', 0)}:"
-            f"{d.get('rate', 0)}:{d.get('bandwidth', 20)}:"
-            f"{d.get('num_subcarriers', 0)}:"
+            f"{d.get('rssi', 0)}:{noise}:"
+            f"{d.get('rate', 0)}:{bw}:"
+            f"{n_sub}:"
             f"{','.join(iq)}")
 
 
@@ -572,8 +588,8 @@ def cmd_monitor(args) -> int:
                         print(f"  {t:>5.1f} "
                               f"{parsed.get('rssi', 0):>+5d} "
                               f"{probas.get('EMPTY', 0):>7.3f} "
-                              f"{probas.get('STATIONARY', 0):>7.3f} "
-                              f"{probas.get('MOVEMENT', 0):>7.3f} "
+                              f"{probas.get('STILL', 0):>7.3f} "
+                              f"{probas.get('MOTION', 0):>7.3f} "
                               f"{cls:>12}",
                               flush=True)
 
@@ -995,7 +1011,7 @@ def main() -> int:
     ap.add_argument("--ml-model", type=str, default=None,
                     help="Percorso modello .joblib (default: csi_model.joblib)")
     ap.add_argument("--stationary-seconds", type=int, default=0,
-                    help="Secondi per fase STATIONARY (0=salta, default: 0)")
+                    help="Secondi per fase STILL (0=salta, default: 0)")
     ap.add_argument("--num-aps", type=int, default=1,
                     help="Numero AP in channel hopping (1=mono-AP, 3=multi-AP). Default 1.")
     args = ap.parse_args()

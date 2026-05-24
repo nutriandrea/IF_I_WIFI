@@ -4,7 +4,7 @@ CSI ML Classifier — Random Forest per classificazione attività da CSI.
 
 Sostituisce CSIDetector con un classificatore Random Forest multi-classe che:
   - Usa il profilo di ampiezza per-subcarrier come firma spettrale
-  - Classifica: EMPTY (vuoto), STATIONARY (fermo/respiro), MOVEMENT (movimento)
+  - Classifica: EMPTY (vuoto), STILL (fermo/respiro), MOTION (movimento)
   - Produce probabilità per ogni classe
 
 Feature da finestra di frame CSI:
@@ -22,7 +22,7 @@ Uso:
   # Inference
   clf.add_frame(frame)
   if clf.ready:
-      probs = clf.predict_proba()  # → {EMPTY: 0.1, STATIONARY: 0.7, MOVEMENT: 0.2}
+      probs = clf.predict_proba()  # → {EMPTY: 0.1, STILL: 0.7, MOTION: 0.2}
 
 Dipendenze opzionali:
   scikit-learn  (apt: python3-sklearn, pip: scikit-learn)
@@ -61,10 +61,10 @@ POSITIONS_LABELS_PATH = os.path.join(MODEL_DIR, "csi_positions_labels.json")
 
 # Classi
 EMPTY = 0
-STATIONARY = 1
-MOVEMENT = 2
-CSI_CLASSES = {EMPTY: "EMPTY", STATIONARY: "STATIONARY", MOVEMENT: "MOVEMENT"}
-CSI_LABELS = ["EMPTY", "STATIONARY", "MOVEMENT"]
+STILL = 1
+MOTION = 2
+CSI_CLASSES = {EMPTY: "EMPTY", STILL: "STILL", MOTION: "MOTION"}
+CSI_LABELS = ["EMPTY", "STILL", "MOTION"]
 
 # Feature names globali (24) + per-subcarrier (32 mean + 32 std = 64) = 88 totali
 GLOBAL_FEATURE_NAMES = [
@@ -439,7 +439,7 @@ class CSIClassifier:
         clf.add_frame(csi_frame_dict)
         if clf.ready:
             probs = clf.predict_proba()
-            # → {EMPTY: 0.1, STATIONARY: 0.7, MOVEMENT: 0.2}
+            # → {EMPTY: 0.1, STILL: 0.7, MOTION: 0.2}
     """
 
     def __init__(self, window_frames: int = 30):
@@ -523,8 +523,8 @@ class CSIClassifier:
 
         Args:
             empty_frames: frame CSI stanza vuota (classe EMPTY)
-            stationary_frames: frame CSI persona ferma (classe STATIONARY, opzionale)
-            movement_frames: frame CSI con movimento (classe MOVEMENT)
+            stationary_frames: frame CSI persona ferma (classe STILL, opzionale)
+            movement_frames: frame CSI con movimento (classe MOTION)
 
         Returns:
             dict con metriche di training.
@@ -533,18 +533,18 @@ class CSIClassifier:
         assert _RF_CLASS is not None  # type narrowing
 
         if not empty_frames or not movement_frames:
-            raise ValueError("Servono almeno frame EMPTY e MOVEMENT")
+            raise ValueError("Servono almeno frame EMPTY e MOTION")
 
         X0, y0 = self._frames_to_xy(empty_frames, EMPTY)
         X1, y1 = ([], [])
         if stationary_frames:
-            X1, y1 = self._frames_to_xy(stationary_frames, STATIONARY)
-        X2, y2 = self._frames_to_xy(movement_frames, MOVEMENT)
+            X1, y1 = self._frames_to_xy(stationary_frames, STILL)
+        X2, y2 = self._frames_to_xy(movement_frames, MOTION)
 
         if len(X0) < 3:
             raise ValueError(f"Pochi feature vector da EMPTY: {len(X0)}")
         if len(X2) < 3:
-            raise ValueError(f"Pochi feature vector da MOVEMENT: {len(X2)}")
+            raise ValueError(f"Pochi feature vector da MOTION: {len(X2)}")
 
         X = X0 + X1 + X2
         y = y0 + y1 + y2
@@ -552,8 +552,8 @@ class CSIClassifier:
         n_classes = len(set(y))
         print(f"  [CSIClassifier] Training: {len(X)} campioni x {len(X[0])} feature")
         print(f"  Classi: EMPTY={y0.count(EMPTY)}, "
-              f"STATIONARY={y1.count(STATIONARY)}, "
-              f"MOVEMENT={y2.count(MOVEMENT)}")
+              f"STILL={y1.count(STILL)}, "
+              f"MOTION={y2.count(MOTION)}")
 
         self._model = _RF_CLASS(
             n_estimators=50,
@@ -954,8 +954,8 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="CSI ML Classifier — training e test")
-    parser.add_argument("--train", nargs="+", metavar=("EMPTY.json", "[STATIONARY.json]", "MOVEMENT.json"),
-                        help="File JSON con frame etichettati (min 2: EMPTY MOVEMENT)")
+    parser.add_argument("--train", nargs="+", metavar=("EMPTY.json", "[STILL.json]", "MOTION.json"),
+                        help="File JSON con frame etichettati (min 2: EMPTY MOTION)")
     parser.add_argument("--save", default=CSI_MODEL_PATH,
                         help="Percorso modello (default: csi_model.joblib)")
     parser.add_argument("--load", type=str, help="Carica modello e mostra info")
@@ -963,7 +963,7 @@ def main():
 
     if args.train:
         if len(args.train) < 2:
-            print("ERRORE: servono almeno EMPTY.json e MOVEMENT.json")
+            print("ERRORE: servono almeno EMPTY.json e MOTION.json")
             sys.exit(1)
 
         labeled = {}
@@ -976,7 +976,7 @@ def main():
             frames = data if isinstance(data, list) else data.get("frames", data)
             # Estrai label dal nome file o dal contenuto
             label = "EMPTY"
-            for kw in ("EMPTY", "STATIONARY", "MOVEMENT", "empty", "stationary", "movement"):
+            for kw in ("EMPTY", "STILL", "MOTION", "empty", "stationary", "movement"):
                 if kw.lower() in os.path.basename(path).lower():
                     label = kw.upper()
                     break
@@ -986,8 +986,8 @@ def main():
         clf = CSIClassifier(window_frames=30)
         metrics = clf.train(
             labeled.get("EMPTY", []),
-            labeled.get("STATIONARY"),
-            labeled.get("MOVEMENT", []),
+            labeled.get("STILL"),
+            labeled.get("MOTION", []),
         )
         clf.save(args.save)
 
@@ -1430,131 +1430,6 @@ def _cusum_detect(
             s_neg = 0.0
     return count
 
-
-# ============================================================
-# RuleBasedClassifier — classificatore rule-based ternario
-# ============================================================
-# Adattato da RuView (github.com/ruvnet/RuView) PresenceClassifier
-
-class RuleBasedResult:
-    """Risultato classificazione rule-based."""
-
-    __slots__ = (
-        "label", "confidence", "presence_detected",
-        "rssi_variance", "motion_band_energy",
-        "breathing_band_energy", "n_change_points", "details",
-    )
-
-    def __init__(
-        self,
-        label: str = "EMPTY",
-        confidence: float = 0.0,
-        presence_detected: bool = False,
-        rssi_variance: float = 0.0,
-        motion_band_energy: float = 0.0,
-        breathing_band_energy: float = 0.0,
-        n_change_points: int = 0,
-        details: str = "",
-    ):
-        self.label = label
-        self.confidence = confidence
-        self.presence_detected = presence_detected
-        self.rssi_variance = rssi_variance
-        self.motion_band_energy = motion_band_energy
-        self.breathing_band_energy = breathing_band_energy
-        self.n_change_points = n_change_points
-        self.details = details
-
-    def to_dict(self) -> dict:
-        return {s: getattr(self, s) for s in self.__slots__}
-
-
-class RuleBasedClassifier:
-    """
-    Classificatore rule-based ternario ABSENT/STILL/ACTIVE.
-
-    Regole:
-      1. presence = RSSI variance >= presence_variance_threshold
-      2. ABSENT       se NOT presence
-      3. ACTIVE       se presence AND motion_band_energy >= motion_energy_threshold
-      4. PRESENT_STILL altrimenti (presence ma motion basso)
-
-    Confidence:
-      - Base (60%): quanto variance supera (o cade sotto) la soglia
-      - Spettrale (20%): energia banda rilevante
-      - Default agreement (20%): sempre 1.0 per singolo ricevitore
-    """
-
-    def __init__(
-        self,
-        presence_variance_threshold: float = 0.5,
-        motion_energy_threshold: float = 0.1,
-    ):
-        self._var_thresh = presence_variance_threshold
-        self._motion_thresh = motion_energy_threshold
-
-    def classify(self, features: RSSIFeatures | None = None, **kwargs) -> RuleBasedResult:
-        """
-        Classifica da RSSIFeatures o da kwargs.
-
-        Parameters
-        ----------
-        features : RSSIFeatures, optional
-        **kwargs : sovrascrive campioni da features
-            variance, motion_band_power, breathing_band_power, n_change_points
-        """
-        if features is not None:
-            variance = features.variance
-            motion_energy = features.motion_band_power
-            breathing_energy = features.breathing_band_power
-            n_cp = features.n_change_points
-        else:
-            variance = kwargs.get("variance", 0.0)
-            motion_energy = kwargs.get("motion_band_power", 0.0)
-            breathing_energy = kwargs.get("breathing_band_power", 0.0)
-            n_cp = kwargs.get("n_change_points", 0)
-
-        # Sovrascrittura esplicita
-        if "variance" in kwargs:
-            variance = kwargs["variance"]
-        if "motion_band_power" in kwargs:
-            motion_energy = kwargs["motion_band_power"]
-        if "breathing_band_power" in kwargs:
-            breathing_energy = kwargs["breathing_band_power"]
-        if "n_change_points" in kwargs:
-            n_cp = kwargs["n_change_points"]
-
-        presence = variance >= self._var_thresh
-
-        if not presence:
-            label = "EMPTY"
-        elif motion_energy >= self._motion_thresh:
-            label = "MOVEMENT"
-        else:
-            label = "STATIONARY"
-
-        confidence = self._compute_confidence(
-            variance, motion_energy, breathing_energy, label
-        )
-
-        details = (
-            f"var={variance:.4f} (thresh={self._var_thresh}), "
-            f"motion_energy={motion_energy:.4f} (thresh={self._motion_thresh}), "
-            f"breathing_energy={breathing_energy:.4f}, "
-            f"change_points={n_cp}"
-        )
-
-        return RuleBasedResult(
-            label=label,
-            confidence=confidence,
-            presence_detected=presence,
-            rssi_variance=variance,
-            motion_band_energy=motion_energy,
-            breathing_band_energy=breathing_energy,
-            n_change_points=n_cp,
-            details=details,
-        )
-
     def _compute_confidence(
         self, variance: float, motion_energy: float,
         breathing_energy: float, label: str,
@@ -1568,9 +1443,9 @@ class RuleBasedClassifier:
             base = min(1.0, ratio)
 
         # Spectral confidence (20%)
-        if label == "MOVEMENT":
+        if label == "MOTION":
             spectral = min(1.0, motion_energy / max(self._motion_thresh, 1e-12))
-        elif label == "STATIONARY":
+        elif label == "STILL":
             spectral = min(1.0, breathing_energy / max(self._motion_thresh, 1e-12))
         else:
             spectral = 1.0

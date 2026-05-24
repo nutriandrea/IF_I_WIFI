@@ -101,7 +101,8 @@ static void wifi_csi_cb(void *ctx, wifi_csi_info_t *data) {
       break;
     }
   }
-  if (tx_node < 0) return;
+  // Se MAC sconosciuto (es. telefono/PC che pinga), assegna NODE_ID
+  if (tx_node < 0) tx_node = NODE_ID;
 
   // Legge I/Q raw dal buffer CSI
   int16_t *raw = (int16_t *)info->buf;
@@ -197,10 +198,11 @@ void setup() {
     ESP.restart();
   }
 
-  uint8_t mac[6];
-  WiFi.macAddress(mac);
   Serial.print("\nESP32 MAC Address: ");
   Serial.println(WiFi.macAddress());
+  Serial.print("ESP32 IP Address: ");
+  Serial.println(WiFi.localIP());
+
   remote_ip.fromString(UDP_TARGET_IP);
 
   udp.begin(WiFi.localIP(), UDP_TARGET_PORT);

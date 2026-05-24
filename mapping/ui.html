@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<title>WiFi Sensing — Live Monitor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    background: linear-gradient(180deg, #0a0e1c 0%, #0e1424 100%);
+    color: #e2e8f0;
+    overflow: hidden;
+  }
+  .app {
+    display: grid;
+    grid-template-columns: 380px 1fr 380px;
+    grid-template-rows: 56px 1fr 200px;
+    height: 100vh;
+    gap: 1px;
+    background: #1e293b;
+  }
+  .app.no-3d {
+    grid-template-columns: 380px 1fr;
+  }
+  .app.no-3d .canvas3d-wrap { display: none; }
+  header {
+    grid-column: 1 / -1;
+    background: #0a0e1c;
+    padding: 0 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    border-bottom: 1px solid #1e293b;
+  }
+  header h1 {
+    font-size: 1.0rem;
+    font-weight: 600;
+    color: #38bdf8;
+    margin: 0;
+    letter-spacing: 0.2px;
+  }
+  header .status {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.8rem;
+    color: #94a3b8;
+  }
+  .status .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: #ef4444;
+  }
+  .status.connected .dot { background: #22c55e; box-shadow: 0 0 6px #22c55e88; }
+  .status.connecting .dot { background: #eab308; }
+
+  .sidebar {
+    background: #0a0e1c;
+    padding: 16px 18px;
+    overflow-y: auto;
+    border-right: 1px solid #1e293b;
+  }
+  .canvas-wrap, .canvas3d-wrap {
+    background: #05060e;
+    position: relative;
+    overflow: hidden;
+  }
+  .canvas3d-wrap { border-left: 1px solid #1e293b; }
+  #canvas3d {
+    width: 100%; height: 100%; display: block;
+  }
+  .badge-3d {
+    position: absolute;
+    top: 14px; right: 14px;
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid #1e293b;
+    border-radius: 6px;
+    padding: 8px 10px;
+    backdrop-filter: blur(8px);
+    font-size: 0.74rem;
+    color: #94a3b8;
+    pointer-events: none;
+  }
+  .badge-3d .z-class {
+    color: #fbbf24;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+  .badge-3d.disabled { opacity: 0.5; }
+  .footer {
+    grid-column: 1 / -1;
+    background: #0a0e1c;
+    padding: 12px 20px;
+    border-top: 1px solid #1e293b;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 24px;
+  }
+
+  /* --- presence card --- */
+  .card {
+    background: rgba(15, 23, 42, 0.5);
+    border: 1px solid #1e293b;
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 14px;
+  }
+  .card h2 {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin: 0 0 10px 0;
+  }
+
+  .state-badge {
+    font-size: 1.4rem;
+    font-weight: 700;
+    padding: 14px 18px;
+    border-radius: 10px;
+    text-align: center;
+    letter-spacing: 1px;
+    transition: all 0.3s ease;
+  }
+  .state-badge.UNKNOWN    { background: #334155;        color: #cbd5e1; }
+  .state-badge.EMPTY      { background: #14532d;        color: #86efac; }
+  .state-badge.STATIONARY { background: #713f12;        color: #fcd34d; }
+  .state-badge.MOVEMENT   { background: #7f1d1d;        color: #fca5a5;
+                            animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse {
+    0%, 100% { transform: scale(1.0); box-shadow: 0 0 0 #ef444400; }
+    50%      { transform: scale(1.03); box-shadow: 0 0 18px #ef444466; }
+  }
+
+  .meter {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0;
+    font-size: 0.78rem;
+  }
+  .meter .lbl { color: #64748b; width: 90px; }
+  .meter .bg {
+    flex: 1; height: 8px;
+    background: #1e293b;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .meter .fg {
+    height: 100%;
+    background: linear-gradient(90deg, #38bdf8, #818cf8);
+    transition: width 0.2s ease;
+  }
+  .meter .val {
+    color: #e2e8f0;
+    font-variant-numeric: tabular-nums;
+    width: 50px;
+    text-align: right;
+    font-size: 0.74rem;
+  }
+
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.78rem;
+    padding: 3px 0;
+  }
+  .stat-row .lbl { color: #64748b; }
+  .stat-row .val { color: #e2e8f0; font-variant-numeric: tabular-nums; }
+
+  .cells-grid {
+    display: grid;
+    gap: 2px;
+    margin-top: 6px;
+  }
+  .cell {
+    background: #1e293b;
+    border-radius: 4px;
+    padding: 6px 4px;
+    text-align: center;
+    font-size: 0.65rem;
+    color: #64748b;
+    transition: background 0.2s ease, color 0.2s ease;
+  }
+  .cell.predicted { color: #fbbf24; font-weight: 700; }
+
+  #room-canvas { width: 100%; height: 100%; display: block; }
+  .canvas-hud {
+    position: absolute;
+    top: 14px; left: 14px;
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid #1e293b;
+    border-radius: 6px;
+    padding: 8px 10px;
+    backdrop-filter: blur(8px);
+    font-size: 0.74rem;
+    color: #94a3b8;
+    pointer-events: none;
+  }
+  .canvas-hud .room { color: #38bdf8; font-weight: 600; }
+
+  .footer .card { margin: 0; }
+  .sparkline {
+    width: 100%;
+    height: 60px;
+    display: block;
+    background: #05060e;
+    border-radius: 6px;
+  }
+
+  .legend {
+    display: flex; gap: 10px; font-size: 0.7rem;
+    color: #94a3b8;
+  }
+  .legend .sw {
+    display: inline-block;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    margin-right: 4px;
+    vertical-align: middle;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header>
+    <h1>WiFi Sensing — Live Monitor</h1>
+    <div class="status" id="status">
+      <span class="dot"></span>
+      <span id="status-label">disconnected</span>
+    </div>
+  </header>
+
+  <aside class="sidebar">
+
+    <div class="card">
+      <h2>Stato Presence</h2>
+      <div class="state-badge UNKNOWN" id="state-badge">UNKNOWN</div>
+      <div style="margin-top:10px"></div>
+      <div class="stat-row"><span class="lbl">durata</span><span class="val" id="state-duration">—</span></div>
+      <div class="stat-row"><span class="lbl">confidence</span><span class="val" id="state-confidence">—</span></div>
+      <div class="meter"><span class="lbl">intensità</span><div class="bg"><div class="fg" id="intensity-bar"></div></div><span class="val" id="intensity-val">—</span></div>
+      <div class="meter" id="calib-row" style="display:none">
+        <span class="lbl">calibrazione</span>
+        <div class="bg"><div class="fg" id="calib-bar"></div></div>
+        <span class="val" id="calib-val">0%</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Per ricevitore</h2>
+      <div id="rx-bars"></div>
+    </div>
+
+    <div class="card">
+      <h2>Quadranti (griglia)</h2>
+      <div class="cells-grid" id="cells-grid"></div>
+      <div class="stat-row" style="margin-top:8px">
+        <span class="lbl">predicted</span>
+        <span class="val" id="cells-predicted">—</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Diagnostica</h2>
+      <div class="stat-row"><span class="lbl">rate</span><span class="val" id="diag-rate">— fps</span></div>
+      <div class="stat-row"><span class="lbl">percorsi attivi</span><span class="val" id="diag-paths">—</span></div>
+      <div class="stat-row"><span class="lbl">regressor ML</span><span class="val" id="diag-reg">—</span></div>
+      <div class="legend" style="margin-top:8px">
+        <span><span class="sw" style="background:#22c55e"></span>RX</span>
+        <span><span class="sw" style="background:#fbbf24"></span>blob</span>
+        <span><span class="sw" style="background:#818cf8"></span>griglia</span>
+      </div>
+    </div>
+
+  </aside>
+
+  <section class="canvas-wrap">
+    <canvas id="room-canvas"></canvas>
+    <div class="canvas-hud">
+      <span class="room" id="room-dim">— × — m</span> · griglia <span id="grid-dim">—</span>
+    </div>
+  </section>
+
+  <section class="canvas3d-wrap">
+    <canvas id="canvas3d"></canvas>
+    <div class="badge-3d disabled" id="badge-3d">
+      <div>3D <span class="z-class" id="z-class">—</span></div>
+      <div style="font-size:0.66rem; color:#64748b">z = <span id="z-val">— m</span> ± <span id="z-std">—</span></div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div class="card">
+      <h2>Intensity (ultimi ~10s)</h2>
+      <canvas class="sparkline" id="spark-intensity"></canvas>
+    </div>
+    <div class="card">
+      <h2>Frame rate (1s rolling)</h2>
+      <canvas class="sparkline" id="spark-rate"></canvas>
+    </div>
+    <div class="card">
+      <h2>Blob trail (ultimi ~5s)</h2>
+      <canvas class="sparkline" id="spark-trail"></canvas>
+    </div>
+  </footer>
+
+</div>
+
+<script>
+(() => {
+  // -------------------- URL params --------------------
+  const qs = new URLSearchParams(location.search);
+  const WS_URL = qs.get("ws") || `ws://${location.hostname || "localhost"}:8765`;
+  const ROOM = (qs.get("room") || "6x5").split("x").map(Number);  // [W, L]
+  const GRID = (qs.get("grid") || "4x4").split("x").map(Number);  // [rows, cols]
+  const RX = (qs.get("rx") || "0.5,0.5;5.5,0.5;3.0,4.5")
+    .split(";").map(p => p.split(",").map(Number));
+  const ROOM_H = parseFloat(qs.get("room_h") || "3");
+  const ENABLE_3D = (qs.get("3d") !== "0");  // default on, ?3d=0 per disabilitare
+
+  if (!ENABLE_3D) document.querySelector(".app").classList.add("no-3d");
+
+  document.getElementById("room-dim").textContent = `${ROOM[0]} × ${ROOM[1]} m`;
+  document.getElementById("grid-dim").textContent = `${GRID[0]}×${GRID[1]}`;
+
+  // -------------------- Cells DOM --------------------
+  const cellsGrid = document.getElementById("cells-grid");
+  cellsGrid.style.gridTemplateColumns = `repeat(${GRID[1]}, 1fr)`;
+  const cellNodes = {};
+  for (let r = 0; r < GRID[0]; r++) {
+    for (let c = 0; c < GRID[1]; c++) {
+      const div = document.createElement("div");
+      div.className = "cell";
+      div.dataset.key = `r${r}c${c}`;
+      div.textContent = `r${r}c${c}`;
+      cellsGrid.appendChild(div);
+      cellNodes[`r${r}c${c}`] = div;
+    }
+  }
+
+  // -------------------- State buffers --------------------
+  const intensityHist = [];
+  const rateHist = [];
+  const trail = [];
+  const TRAIL_MAX = 50;
+  let lastPresence = null;
+  let lastPosition = null;
+  let lastCells = null;
+  let lastDiag = null;
+  let last3d = null;
+
+  // -------------------- Canvas room --------------------
+  const cv = document.getElementById("room-canvas");
+  const ctx = cv.getContext("2d");
+
+  function resize() {
+    const rect = cv.parentElement.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    cv.width = rect.width * dpr;
+    cv.height = rect.height * dpr;
+    cv.style.width = rect.width + "px";
+    cv.style.height = rect.height + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  function drawRoom() {
+    const w = cv.width / (window.devicePixelRatio || 1);
+    const h = cv.height / (window.devicePixelRatio || 1);
+    ctx.clearRect(0, 0, w, h);
+
+    const pad = 40;
+    const sx = (w - pad * 2) / ROOM[0];
+    const sy = (h - pad * 2) / ROOM[1];
+    const s = Math.min(sx, sy);
+    const ox = (w - ROOM[0] * s) / 2;
+    const oy = (h - ROOM[1] * s) / 2;
+
+    const toScreen = (x, y) => [ox + x * s, h - (oy + y * s)];
+
+    // Room boundary
+    ctx.strokeStyle = "#1e293b";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.rect(ox, h - oy - ROOM[1] * s, ROOM[0] * s, ROOM[1] * s);
+    ctx.stroke();
+
+    // Grid
+    ctx.strokeStyle = "rgba(129, 140, 248, 0.15)";
+    ctx.lineWidth = 1;
+    for (let r = 0; r < GRID[0]; r++) {
+      const yy = (r * ROOM[1] / GRID[0]);
+      const [, py] = toScreen(0, yy);
+      ctx.beginPath();
+      ctx.moveTo(ox, py); ctx.lineTo(ox + ROOM[0] * s, py); ctx.stroke();
+    }
+    for (let c = 0; c < GRID[1]; c++) {
+      const xx = c * ROOM[0] / GRID[1];
+      const [px] = toScreen(xx, 0);
+      ctx.beginPath();
+      ctx.moveTo(px, h - oy - ROOM[1] * s); ctx.lineTo(px, h - oy); ctx.stroke();
+    }
+
+    // Cell probability heatmap
+    if (lastCells) {
+      for (let r = 0; r < lastCells.rows; r++) {
+        for (let c = 0; c < lastCells.cols; c++) {
+          const p = lastCells.probas[`r${r}c${c}`] || 0;
+          const alpha = Math.min(0.55, p * 1.5);
+          ctx.fillStyle = `rgba(129, 140, 248, ${alpha})`;
+          const cellW = ROOM[0] * s / lastCells.cols;
+          const cellH = ROOM[1] * s / lastCells.rows;
+          // r=0 is top row
+          const [px, py] = toScreen(c * ROOM[0] / lastCells.cols,
+                                     (lastCells.rows - r) * ROOM[1] / lastCells.rows);
+          ctx.fillRect(px, py, cellW, cellH);
+        }
+      }
+    }
+
+    // RX markers
+    RX.forEach((p, i) => {
+      const [px, py] = toScreen(p[0], p[1]);
+      ctx.fillStyle = "#22c55e";
+      ctx.strokeStyle = "rgba(34, 197, 94, 0.4)";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(px, py, 7, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(px, py, 14, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = "#22c55e";
+      ctx.font = "11px -apple-system, sans-serif";
+      ctx.fillText(`RX${i}`, px + 16, py + 4);
+    });
+
+    // Blob trail
+    if (trail.length > 1) {
+      ctx.strokeStyle = "rgba(251, 191, 36, 0.4)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      trail.forEach((pt, i) => {
+        const [px, py] = toScreen(pt.x, pt.y);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      });
+      ctx.stroke();
+    }
+
+    // Current blob
+    if (lastPosition) {
+      const [px, py] = toScreen(lastPosition.x, lastPosition.y);
+      // Uncertainty ellipse
+      ctx.fillStyle = "rgba(251, 191, 36, 0.18)";
+      ctx.strokeStyle = "rgba(251, 191, 36, 0.5)";
+      ctx.beginPath();
+      ctx.ellipse(px, py,
+        Math.max(6, lastPosition.x_std * s),
+        Math.max(6, lastPosition.y_std * s),
+        0, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+      // Centroid
+      ctx.fillStyle = "#fbbf24";
+      ctx.beginPath();
+      ctx.arc(px, py, 6, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // -------------------- Sparklines --------------------
+  function drawSparkline(canvas, data, color, maxValHint = null) {
+    const c = canvas.getContext("2d");
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    const dpr = window.devicePixelRatio || 1;
+    if (canvas.width !== w * dpr) {
+      canvas.width = w * dpr; canvas.height = h * dpr;
+      c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    c.clearRect(0, 0, w, h);
+    if (data.length < 2) return;
+    const max = maxValHint || Math.max(...data, 1e-6);
+    const min = 0;
+    const stepX = w / Math.max(1, data.length - 1);
+    c.strokeStyle = color;
+    c.fillStyle = color + "33";
+    c.lineWidth = 1.5;
+    c.beginPath();
+    data.forEach((v, i) => {
+      const x = i * stepX;
+      const y = h - ((v - min) / (max - min)) * h;
+      if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
+    });
+    c.stroke();
+    // fill under
+    c.lineTo(w, h); c.lineTo(0, h); c.closePath();
+    c.fill();
+  }
+
+  function drawTrail(canvas) {
+    const c = canvas.getContext("2d");
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    const dpr = window.devicePixelRatio || 1;
+    if (canvas.width !== w * dpr) {
+      canvas.width = w * dpr; canvas.height = h * dpr;
+      c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    c.clearRect(0, 0, w, h);
+    if (trail.length < 2) return;
+    const minX = 0, maxX = ROOM[0], minY = 0, maxY = ROOM[1];
+    c.strokeStyle = "#fbbf24"; c.lineWidth = 1.5;
+    c.beginPath();
+    trail.forEach((pt, i) => {
+      const px = (pt.x - minX) / (maxX - minX) * w;
+      const py = h - (pt.y - minY) / (maxY - minY) * h;
+      if (i === 0) c.moveTo(px, py); else c.lineTo(px, py);
+    });
+    c.stroke();
+    if (trail.length > 0) {
+      const last = trail[trail.length - 1];
+      const px = (last.x - minX) / (maxX - minX) * w;
+      const py = h - (last.y - minY) / (maxY - minY) * h;
+      c.fillStyle = "#fbbf24"; c.beginPath();
+      c.arc(px, py, 4, 0, Math.PI * 2); c.fill();
+    }
+  }
+
+  // -------------------- Rendering pump --------------------
+  function renderHUD() {
+    // Presence
+    if (lastPresence) {
+      const badge = document.getElementById("state-badge");
+      badge.textContent = lastPresence.state;
+      badge.className = "state-badge " + lastPresence.state;
+      document.getElementById("state-duration").textContent =
+        `${(lastPresence.duration_s || 0).toFixed(1)} s`;
+      document.getElementById("state-confidence").textContent =
+        `${((lastPresence.confidence || 0) * 100).toFixed(0)}%`;
+
+      const baseline = lastPresence.baseline || 0;
+      const intensity = lastPresence.intensity || 0;
+      const scale = baseline > 0 ? Math.min(1.0, intensity / (baseline * 6)) : 0;
+      document.getElementById("intensity-bar").style.width = `${scale * 100}%`;
+      document.getElementById("intensity-val").textContent = intensity.toFixed(3);
+
+      const calibRow = document.getElementById("calib-row");
+      if (!lastPresence.calibrated) {
+        calibRow.style.display = "flex";
+        const p = (lastPresence.calibration_progress || 0) * 100;
+        document.getElementById("calib-bar").style.width = `${p}%`;
+        document.getElementById("calib-val").textContent = `${p.toFixed(0)}%`;
+      } else {
+        calibRow.style.display = "none";
+      }
+
+      // Per-RX bars
+      const rxBars = document.getElementById("rx-bars");
+      rxBars.innerHTML = "";
+      const perRx = lastPresence.per_rx_intensity || {};
+      const maxV = Math.max(...Object.values(perRx), 1e-6);
+      Object.keys(perRx).sort().forEach(rx => {
+        const v = perRx[rx];
+        const div = document.createElement("div");
+        div.className = "meter";
+        div.innerHTML = `<span class="lbl">RX${rx}</span>
+                         <div class="bg"><div class="fg" style="width:${(v/maxV)*100}%"></div></div>
+                         <span class="val">${v.toFixed(3)}</span>`;
+        rxBars.appendChild(div);
+      });
+
+      intensityHist.push(intensity);
+      if (intensityHist.length > 100) intensityHist.shift();
+    }
+
+    if (lastCells) {
+      const pred = lastCells.predicted;
+      document.getElementById("cells-predicted").textContent =
+        `${pred} (${(lastCells.confidence * 100).toFixed(0)}%)`;
+      Object.entries(cellNodes).forEach(([key, node]) => {
+        const p = lastCells.probas[key] || 0;
+        node.style.background = `rgba(129, 140, 248, ${Math.min(0.7, p * 1.5)})`;
+        node.classList.toggle("predicted", key === pred);
+      });
+    }
+
+    if (lastDiag) {
+      document.getElementById("diag-rate").textContent = `${(lastDiag.rate_hz || 0).toFixed(1)} fps`;
+      document.getElementById("diag-paths").textContent = lastDiag.paths_active || 0;
+      document.getElementById("diag-reg").textContent = lastDiag.regressor_loaded ? "attivo" : "off";
+      rateHist.push(lastDiag.rate_hz || 0);
+      if (rateHist.length > 60) rateHist.shift();
+    }
+
+    drawRoom();
+    drawSparkline(document.getElementById("spark-intensity"), intensityHist, "#38bdf8");
+    drawSparkline(document.getElementById("spark-rate"), rateHist, "#22c55e");
+    drawTrail(document.getElementById("spark-trail"));
+  }
+
+  // -------------------- WebSocket --------------------
+  let ws = null;
+  const statusEl = document.getElementById("status");
+  const statusLabel = document.getElementById("status-label");
+
+  function setStatus(state, label) {
+    statusEl.className = "status " + state;
+    statusLabel.textContent = label;
+  }
+
+  function connect() {
+    setStatus("connecting", `connessione → ${WS_URL}`);
+    ws = new WebSocket(WS_URL);
+    ws.onopen = () => setStatus("connected", `connesso → ${WS_URL}`);
+    ws.onclose = () => {
+      setStatus("", "disconnesso. retry in 2s…");
+      setTimeout(connect, 2000);
+    };
+    ws.onerror = () => { /* il close gestirà il retry */ };
+    ws.onmessage = (ev) => {
+      let m;
+      try { m = JSON.parse(ev.data); } catch { return; }
+      switch (m.type) {
+        case "hello":     /* nothing */ break;
+        case "presence":  lastPresence = m; break;
+        case "position":  lastPosition = m; trail.push({x: m.x, y: m.y});
+                          while (trail.length > TRAIL_MAX) trail.shift(); break;
+        case "position_ml": /* future: differentiate visually */ break;
+        case "position_3d": last3d = m; break;
+        case "cells":     lastCells = m; break;
+        case "diag":      lastDiag = m; break;
+      }
+    };
+  }
+  connect();
+
+  // -------------------- 3D scene (Three.js, lazy loaded) --------------------
+  let three = null;          // { scene, camera, renderer, blob, blobLabel }
+  function init3D() {
+    if (!ENABLE_3D || three || !window.THREE) return;
+    const THREE = window.THREE;
+    const wrap = document.querySelector(".canvas3d-wrap");
+    const canvas = document.getElementById("canvas3d");
+    const W = wrap.clientWidth, H = wrap.clientHeight;
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x05060e);
+
+    const camera = new THREE.PerspectiveCamera(50, W / H, 0.1, 100);
+    // Punto di vista isometrico-ish
+    camera.position.set(ROOM[0] * 1.4, ROOM_H * 1.6, ROOM[1] * 1.5);
+    camera.lookAt(ROOM[0] / 2, ROOM_H / 2, ROOM[1] / 2);
+
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio || 1);
+    renderer.setSize(W, H, false);
+
+    // Stanza wireframe
+    const room = new THREE.Mesh(
+      new THREE.BoxGeometry(ROOM[0], ROOM_H, ROOM[1]),
+      new THREE.MeshBasicMaterial({ color: 0x38bdf8, wireframe: true, opacity: 0.35, transparent: true }),
+    );
+    room.position.set(ROOM[0] / 2, ROOM_H / 2, ROOM[1] / 2);
+    scene.add(room);
+
+    // Pavimento (per dare orientamento)
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(ROOM[0], ROOM[1]),
+      new THREE.MeshBasicMaterial({ color: 0x0e1424, side: THREE.DoubleSide }),
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.set(ROOM[0] / 2, 0.001, ROOM[1] / 2);
+    scene.add(floor);
+
+    // RX markers
+    RX.forEach((p, i) => {
+      const s = new THREE.Mesh(
+        new THREE.SphereGeometry(0.12, 16, 12),
+        new THREE.MeshBasicMaterial({ color: 0x22c55e }),
+      );
+      s.position.set(p[0], 1.0, p[1]);  // RX a 1 m da terra (default)
+      scene.add(s);
+      // stelo verso il pavimento
+      const stem = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.01, 0.01, 1.0, 6),
+        new THREE.MeshBasicMaterial({ color: 0x166534 }),
+      );
+      stem.position.set(p[0], 0.5, p[1]);
+      scene.add(stem);
+    });
+
+    // Blob: ellissoide animato
+    const blob = new THREE.Mesh(
+      new THREE.SphereGeometry(1.0, 24, 18),  // scaliamo via .scale
+      new THREE.MeshBasicMaterial({
+        color: 0xfbbf24, transparent: true, opacity: 0.55, wireframe: false,
+      }),
+    );
+    blob.position.set(ROOM[0] / 2, ROOM_H / 2, ROOM[1] / 2);
+    blob.scale.set(0.1, 0.1, 0.1);
+    blob.visible = false;
+    scene.add(blob);
+
+    // Wireframe interno per dare profondità all'ellisse
+    const blobWire = new THREE.Mesh(
+      new THREE.SphereGeometry(1.0, 16, 12),
+      new THREE.MeshBasicMaterial({ color: 0xfbbf24, wireframe: true, opacity: 0.35, transparent: true }),
+    );
+    blob.add(blobWire);
+
+    three = { scene, camera, renderer, blob, wrap };
+
+    // Resize handler
+    new ResizeObserver(() => {
+      const w = wrap.clientWidth, h = wrap.clientHeight;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h, false);
+    }).observe(wrap);
+  }
+
+  function render3D() {
+    if (!three) {
+      if (window.THREE) init3D();
+      return;
+    }
+    // Rotazione lenta camera per dare profondità
+    const t = performance.now() * 0.00012;
+    const r = Math.max(ROOM[0], ROOM[1]) * 1.5;
+    three.camera.position.x = ROOM[0] / 2 + Math.cos(t) * r;
+    three.camera.position.z = ROOM[1] / 2 + Math.sin(t) * r;
+    three.camera.position.y = ROOM_H * 1.6;
+    three.camera.lookAt(ROOM[0] / 2, ROOM_H / 2, ROOM[1] / 2);
+
+    if (last3d) {
+      three.blob.visible = true;
+      three.blob.position.set(last3d.x, last3d.z, last3d.y);  // mapping (x, z, y) → (x_world, y_world↑, z_world)
+      const sx = Math.max(0.08, last3d.x_std);
+      const sz = Math.max(0.08, last3d.y_std);  // y nel mondo è il "lato" nel piano
+      const sy = Math.max(0.08, last3d.z_std);  // z nel mondo è l'altezza
+      three.blob.scale.set(sx, sy, sz);
+    }
+
+    three.renderer.render(three.scene, three.camera);
+  }
+
+  // Aggiorna HUD 3D
+  function render3DHUD() {
+    const badge = document.getElementById("badge-3d");
+    if (!last3d) {
+      badge.classList.add("disabled");
+      return;
+    }
+    badge.classList.remove("disabled");
+    document.getElementById("z-class").textContent = last3d.z_class;
+    document.getElementById("z-val").textContent = `${last3d.z.toFixed(2)} m`;
+    document.getElementById("z-std").textContent = `${last3d.z_std.toFixed(2)} m`;
+  }
+
+  // Carica Three.js da CDN solo se 3D abilitato
+  if (ENABLE_3D) {
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js";
+    s.onload = init3D;
+    s.onerror = () => {
+      console.warn("Three.js non caricato (offline?). 3D disabilitato.");
+      document.querySelector(".app").classList.add("no-3d");
+    };
+    document.head.appendChild(s);
+  }
+
+  // Render at ~20 Hz indipendentemente dai messaggi (smooth animation)
+  setInterval(() => {
+    renderHUD();
+    if (ENABLE_3D) {
+      render3D();
+      render3DHUD();
+    }
+  }, 50);
+})();
+</script>
+</body>
+</html>

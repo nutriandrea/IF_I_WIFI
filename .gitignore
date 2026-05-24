@@ -28,3 +28,11 @@ enh_calib_*.json
 
 *.joblib
 csi/*.json
+
+# IDE / workspace
+.idea/
+.sisyphus/
+
+# Test artifacts
+csi_quadrants_regressor.joblib
+csi_quadrants_regressor.json
