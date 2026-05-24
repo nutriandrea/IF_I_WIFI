@@ -1,7 +1,7 @@
 # Arduino Wi-Fi Sensing
 
-> **Human presence, position, and breathing rate from everyday Wi-Fi.**
-> ESP32 captures Channel State Information (CSI) → UNO Q processes it with ML → browser shows heatmap + vitals.
+> **Human presence, position, vitals (breathing + heart rate), and sleep analysis from everyday Wi-Fi.**
+> ESP32 captures Channel State Information (CSI) → host processes it → browser shows heatmap, radar 3D, and vitals.
 
 No cameras. No wearables. Just the Wi-Fi routers already in the room.
 
@@ -11,13 +11,21 @@ No cameras. No wearables. Just the Wi-Fi routers already in the room.
 
 | Capability | How | Hardware |
 |---|---|---|
-| **Cross-ping multi-RX** | 3 ESP32 si pingano fra loro a 100 Hz → 9 canali CSI stabili `(tx, rx)`, MAC fissi | 3 ESP32 + host (NEW firmware esp32_radar3d) |
-| **Position (grid classifier)** | ML classifier on CSI features → which cell of a grid is occupied | ESP32 + host |
-| **Continuous (x,y) tracking** | RandomForestRegressor + Kalman 2D → blob coordinates in metri | 3 ESP32 + host |
-| **Motion vs static** | Velocity threshold on Kalman state → "fermo" / "movimento" | derived from blob |
-| **Browser radar 3D** | Three.js sonar-style scene, blob continuo, sweep rings, motion indicator | ESP32 + host + browser |
+| **Cross-ping multi-RX** | 3 ESP32 ping each other at 100 Hz → 9 stable CSI (tx, rx) channels, fixed MACs | 3 ESP32 + host |
+| **Presence (EMPTY/STILL/MOTION)** | Variance-based state machine, no ML. Configurable hysteresis + dwell | 1-3 ESP32 + host |
+| **Position (grid classifier)** | RandomForest classifier on CSI stats → which grid cell is occupied | 3 ESP32 + host |
+| **Continuous (x,y) tracking** | RF multi-output regressor + Kalman 2D → blob coordinates in meters | 3 ESP32 + host |
+| **Motion vs static** | Velocity hysteresis on Kalman state | derived from position |
+| **Browser radar 3D** | Three.js sonar scene, continuous blob, sweep rings, motion indicator | ESP32 + host + browser |
 | **Browser heatmap grid** | Real-time probability grid via WebSocket | ESP32 + host + browser |
-| **Breathing rate (BPM)** | Phase CSI → bandpass 0.1–0.5 Hz → zero-crossing BPM | ESP32 + host |
+| **Breathing rate (BPM)** | Phase CSI → IIR bandpass 0.1–0.5 Hz → zero-crossing BPM (RuView port) | 3 ESP32 + host |
+| **Heart rate (BPM)** | Phase CSI → IIR bandpass 0.8–2.0 Hz → autocorrelation peak HR (RuView port) | 3 ESP32 + host |
+| **Sleep stage analysis** | Breathing regularity heuristic → awake/light/deep + apnea detection | 3 ESP32 + host |
+| **Doppler profile** | FFT-based Doppler shift from phase difference → spectral band power | 3 ESP32 + host |
+| **RSSI features** | CUSUM, FFT band powers, temporal stats, skew/kurtosis from RSSI stream | 1-3 ESP32 + host |
+| **Signal processing** | Spectrogram, BVP, Fresnel zones, biquad IIR, Hampel filter, Welford stats, CSI ratio | host (library) |
+| **Home Assistant bridge** | MQTT discovery + state publishing (6 sensors + 3 binary sensors per node) | host + MQTT broker |
+| **Remote sensing client** | WebSocket client for remote RuView-compatible sensing server | host (network) |
 | **Presence/motion (basic)** | RSSI-based detector (works without ESP32) | UNO Q only |
 | **Record & replay** | Save CSI to file, replay for offline development | ESP32 + host |
 
@@ -406,6 +414,21 @@ python3 -m http.server -d mapping 8000
 | Stessa rete WiFi 2.4 GHz, canale fisso (1/6/11) |  |
 
 Tutti i pinger devono fare `ping -i 0.02 <ip_di_un_ESP32>` per generare traffico CSI (~50 Hz × 3 RX). Lascia attivi tutti i ping durante training E inference.
+
+---
+
+## Documentation
+
+| File | Contents |
+|------|----------|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System architecture, module map, data flow, dependency graph, resource budget |
+| [`docs/API.md`](docs/API.md) | Full Python API reference for all modules |
+| [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) | Per-feature spec sheets with hardware requirements and expected results (Italian) |
+| [`docs/HOW_IT_WORKS.md`](docs/HOW_IT_WORKS.md) | System explanation from scratch (Italian) |
+| [`docs/HARDWARE_SETUP.md`](docs/HARDWARE_SETUP.md) | Hardware requirements and setup guide |
+| [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | Debugging guide |
+| [`docs/TESTING.md`](docs/TESTING.md) | Test suite reference |
+| [`firmware/esp32_radar3d/FLASHING.md`](firmware/esp32_radar3d/FLASHING.md) | ESP32 firmware flashing guide |
 
 ---
 
