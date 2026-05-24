@@ -30,11 +30,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import signal
 import socket
 import sys
 import threading
 import time
+
+logger = logging.getLogger(__name__)
 from collections import Counter
 from typing import Iterator
 
@@ -45,7 +48,8 @@ from .csi_processor import (
     CSI_BINARY_MAGIC,
     CSI_RADAR3D_MAGIC,
 )
-from .blob_regressor import BlobRegressor, BLOB_MODEL_PATH
+from .quadrants.regressor import PositionRegressor, PositionEstimate
+from .quadrants.regressor import DEFAULT_MODEL_PATH as BLOB_MODEL_PATH
 
 # Optional dependencies
 _HAVE_WS = False
@@ -114,7 +118,7 @@ async def _ws_handler(ws, path=None):
         async for _ in ws:
             pass
     except Exception:
-        pass
+        logger.debug("WebSocket client disconnected")
     finally:
         _ws_clients.discard(ws)
 
@@ -165,9 +169,9 @@ def _ws_server_thread(port: int):
 # ============================================================
 def cmd_train(args) -> int:
     """Raccoglie N punti di calibrazione interattivamente e addestra."""
-    blob = BlobRegressor(window_frames=args.window)
+    blob = PositionRegressor(window_frames=args.window)
 
-    print("\n  === BLOB REGRESSOR TRAINING ===")
+    print("\n  === POSITION REGRESSOR TRAINING ===")
     print(f"  Window frames: {args.window}")
     print(f"  Secondi per punto: {args.seconds}")
     print(f"  Punti da raccogliere: {args.num_points}")
@@ -241,7 +245,7 @@ def cmd_train(args) -> int:
         return 1
 
     print(f"\n  Inizio training su {len(samples)} punti...")
-    metrics = blob.train(samples)
+    metrics = blob.train_continuous(samples)
 
     print(f"\n  === RISULTATI ===")
     for k, v in metrics.items():
@@ -257,11 +261,10 @@ def cmd_train(args) -> int:
 # MONITOR mode
 # ============================================================
 def cmd_monitor(args) -> int:
-    blob = BlobRegressor(
+    blob = PositionRegressor(
         window_frames=args.window,
-        kalman_q_pos=args.kalman_q_pos,
-        kalman_q_vel=args.kalman_q_vel,
-        kalman_r_meas=args.kalman_r_meas,
+        smooth_q_pos=args.kalman_q_pos,
+        smooth_q_vel=args.kalman_q_vel,
         motion_threshold_mps=args.motion_thresh,
         motion_sustain_n=args.motion_sustain,
     )
@@ -315,28 +318,34 @@ def cmd_monitor(args) -> int:
             if not blob.ready:
                 continue
 
-            state = blob.predict_smoothed()
-            if state is None:
+            est = blob.predict()
+            if est is None:
                 continue
 
             now = time.time() - t0
-            motion_str = "MOVIMENTO" if state["motion"] else "fermo"
-            transition = "" if state["motion"] == last_motion else " <<<"
-            last_motion = state["motion"]
+            motion_str = "MOVIMENTO" if est.motion else "fermo"
+            transition = "" if est.motion == last_motion else " <<<"
+            last_motion = est.motion
 
             if now - last_print >= 0.3:
                 last_print = now
                 print(f"  {now:>6.1f} "
-                      f"{state['x_raw']:>6.2f} {state['y_raw']:>6.2f} "
-                      f"{state['x']:>6.2f} {state['y']:>6.2f} "
-                      f"{state['speed']:>6.3f}  "
+                      f"{est.x:>6.2f} {est.y:>6.2f} "
+                      f"{est.x:>6.2f} {est.y:>6.2f} "
+                      f"{est.speed:>6.3f}  "
                       f"{motion_str}{transition}",
                       flush=True)
 
             ws_send({
                 "type": "blob",
                 "t": round(now, 3),
-                **state,
+                "x_raw": round(est.x, 3),
+                "y_raw": round(est.y, 3),
+                "x": round(est.x, 3),
+                "y": round(est.y, 3),
+                "speed": round(est.speed, 3),
+                "motion": est.motion,
+                "confidence": round(est.confidence, 3),
             })
 
         print(f"\n  Terminato. {frame_count} frame totali. "

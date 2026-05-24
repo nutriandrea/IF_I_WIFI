@@ -250,6 +250,8 @@ class PositionEstimate:
     smoothed: bool
     confidence: float
     t: float
+    speed: float = 0.0       # velocità Kalman stimata (m/s)
+    motion: bool = False     # True se speed > soglia per N campioni
 
 
 # ============================================================
@@ -274,7 +276,9 @@ class PositionRegressor:
                  window_frames: int = 30,
                  smooth_q_pos: float = 1e-4,
                  smooth_q_vel: float = 1e-3,
-                 smoothing: bool = True):
+                 smoothing: bool = True,
+                 motion_threshold_mps: float = 0.15,
+                 motion_sustain_n: int = 3):
         self.window_frames = window_frames
         self.frame_hist: deque = deque(maxlen=window_frames)
         self._model = None
@@ -292,6 +296,13 @@ class PositionRegressor:
 
         self._smoother = KalmanFilter2D(q_pos=smooth_q_pos, q_vel=smooth_q_vel) if smoothing else None
         self._last_t = 0.0
+
+        # Motion detection state (hysteresis on Kalman velocity)
+        self._motion_thresh = motion_threshold_mps
+        self._motion_sustain = motion_sustain_n
+        self._above_n = 0
+        self._below_n = 0
+        self._motion_state = False
 
     # ----------- Status -----------
     @property
@@ -421,6 +432,95 @@ class PositionRegressor:
             "n_features": len(X[0]),
             "n_classes": len(self._xy_map),
             "class_distribution": class_counts,
+            "in_sample_mae_x": mae_x,
+            "in_sample_mae_y": mae_y,
+            "trained_at": time.time(),
+        }
+        return self._train_metrics
+
+    # ----------- Continuous-coordinate training (alternative to grid labels) -----------
+    def train_continuous(self, samples: dict[tuple[float, float], list]) -> dict[str, Any]:
+        """Addestra con coordinate continue (x,y) anziché etichette griglia.
+
+        Compatibile con l'interfaccia di BlobRegressor.train().
+        Crea label artificiali 'rXcY' mappando le coordinate su una griglia e
+        allena il modello RF multi-output.
+        """
+        self._check_deps()
+        if len(samples) < 2:
+            raise ValueError("Servono almeno 2 punti di calibrazione")
+
+        # Build synthetic grid labels: discretize (x,y) into cell labels
+        coords = list(samples.keys())
+        xs = [c[0] for c in coords]
+        ys = [c[1] for c in coords]
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+        x_range = max(max_x - min_x, 0.1)
+        y_range = max(max_y - min_y, 0.1)
+        # Infer grid from sample count: try sqrt
+        n = len(coords)
+        cols = max(2, int(math.sqrt(n * 1.5)))
+        rows = max(2, (n + cols - 1) // cols)
+
+        labeled: dict[str, list] = {}
+        for (x, y), frames in samples.items():
+            c = min(cols - 1, int((x - min_x) / x_range * cols))
+            r = min(rows - 1, int((y - min_y) / y_range * rows))
+            label = f"r{r}c{c}"
+            labeled.setdefault(label, []).extend(frames)
+
+        self._rows, self._cols = rows, cols
+        self._class_labels = list(labeled.keys())
+        self._xy_map = grid_labels_to_xy_map(self._class_labels)
+
+        # Detect sources from data
+        self._source_key, self._known_sources = self._detect_sources(labeled)
+        use_per_source = len(self._known_sources) >= 2
+        if use_per_source:
+            self._custom_feature_names = _generate_source_feature_names(
+                self._known_sources, self._source_key)
+
+        # Build training set
+        X: list = []
+        y_x: list = []
+        y_y: list = []
+        class_counts: dict[str, int] = {}
+        for label, frames in labeled.items():
+            xy = self._xy_map.get(label)
+            if xy is None:
+                continue
+            tx, ty = xy
+            Xi = self._frames_to_X(frames, use_per_source)
+            if not Xi:
+                continue
+            X.extend(Xi)
+            y_x.extend([tx] * len(Xi))
+            y_y.extend([ty] * len(Xi))
+            class_counts[label] = len(Xi)
+
+        if len(X) < 10:
+            raise ValueError(f"Troppi pochi training samples: {len(X)}")
+
+        y_multi = list(zip(y_x, y_y))
+        self._model = _RF_REGRESSOR(
+            n_estimators=80, max_depth=12, min_samples_leaf=3,
+            random_state=42, n_jobs=1,
+        )
+        self._model.fit(X, y_multi)
+        self._trained = True
+
+        # Diagnostic MAE on training set
+        y_pred = self._model.predict(X)
+        mae_x = float(mean(abs(y_pred[i][0] - y_x[i]) for i in range(len(X))))
+        mae_y = float(mean(abs(y_pred[i][1] - y_y[i]) for i in range(len(X))))
+
+        self._train_metrics = {
+            "n_train": len(X),
+            "n_features": len(X[0]),
+            "n_points": len(samples),
+            "grid_cols": cols,
+            "grid_rows": rows,
             "in_sample_mae_x": mae_x,
             "in_sample_mae_y": mae_y,
             "trained_at": time.time(),
@@ -593,14 +693,32 @@ class PositionRegressor:
         y_std = max(0.02, min(0.5, y_std))
 
         x_raw, y_raw = float(xy[0]), float(xy[1])
+        speed = 0.0
         if self._smoother is not None:
             x_out, y_out, x_std_o, y_std_o = self._smoother.update(
                 z=(x_raw, y_raw), R=(x_std ** 2, y_std ** 2), t=self._last_t,
             )
             smoothed = True
+            # Extract velocity from Kalman state [x, y, vx, vy]
+            if self._smoother.x is not None:
+                vx = float(self._smoother.x[2])
+                vy = float(self._smoother.x[3])
+                speed = math.sqrt(vx * vx + vy * vy)
         else:
             x_out, y_out, x_std_o, y_std_o = x_raw, y_raw, x_std, y_std
             smoothed = False
+
+        # Motion hysteresis (same logic as blob_regressor.BlobRegressor)
+        if speed > self._motion_thresh:
+            self._above_n += 1
+            self._below_n = 0
+            if self._above_n >= self._motion_sustain:
+                self._motion_state = True
+        else:
+            self._below_n += 1
+            self._above_n = 0
+            if self._below_n >= self._motion_sustain:
+                self._motion_state = False
 
         # Confidence: inversa di un'incertezza normalizzata
         unc = (x_std_o + y_std_o) / 2.0  # in [0, 0.5]
@@ -612,6 +730,8 @@ class PositionRegressor:
             smoothed=smoothed,
             confidence=confidence,
             t=self._last_t,
+            speed=speed,
+            motion=self._motion_state,
         )
 
     def reset_smoother(self) -> None:
