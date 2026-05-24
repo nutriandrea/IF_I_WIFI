@@ -11,10 +11,11 @@ No cameras. No wearables. Just the Wi-Fi routers already in the room.
 
 | Capability | How | Hardware |
 |---|---|---|
+| **Cross-ping multi-RX** | 3 ESP32 si pingano fra loro a 100 Hz → 9 canali CSI stabili `(tx, rx)`, MAC fissi | 3 ESP32 + host (NEW firmware esp32_radar3d) |
 | **Position (grid classifier)** | ML classifier on CSI features → which cell of a grid is occupied | ESP32 + host |
-| **Continuous (x,y) tracking** | RandomForestRegressor + Kalman 2D → blob coordinates in metri | 3 ESP32 + host (NEW) |
-| **Motion vs static** | Velocity threshold on Kalman state → "fermo" / "movimento" | derived from blob (NEW) |
-| **Browser radar 3D** | Three.js sonar-style scene, blob continuo, sweep rings, motion indicator | ESP32 + host + browser (NEW) |
+| **Continuous (x,y) tracking** | RandomForestRegressor + Kalman 2D → blob coordinates in metri | 3 ESP32 + host |
+| **Motion vs static** | Velocity threshold on Kalman state → "fermo" / "movimento" | derived from blob |
+| **Browser radar 3D** | Three.js sonar-style scene, blob continuo, sweep rings, motion indicator | ESP32 + host + browser |
 | **Browser heatmap grid** | Real-time probability grid via WebSocket | ESP32 + host + browser |
 | **Breathing rate (BPM)** | Phase CSI → bandpass 0.1–0.5 Hz → zero-crossing BPM | ESP32 + host |
 | **Presence/motion (basic)** | RSSI-based detector (works without ESP32) | UNO Q only |
@@ -24,15 +25,24 @@ No cameras. No wearables. Just the Wi-Fi routers already in the room.
 
 ## Quick start — demo completa
 
-### 1. Flash ESP32
+### 1. Flash ESP32 — cross-ping firmware (architettura corrente)
 
-Apri `firmware/esp32_csi_firmware/esp32_csi_firmware.ino` nell'IDE Arduino:
+Sketch: **`firmware/esp32_radar3d/esp32_radar3d.ino`** (guida dettagliata: [`firmware/esp32_radar3d/FLASHING.md`](firmware/esp32_radar3d/FLASHING.md)).
 
-- **AP mode** (3 PC si connettono all'ESP32): scommenta `#define CSI_AP_MODE`
-- **Serial mode** (ESP32 collegato via USB): commenta `#define CSI_AP_MODE`
-- Copia `secrets.h.example` in `secrets.h` e configura il tuo WiFi
+I 3 ESP32 si **pingano fra loro** a 100 Hz su canale 6: ogni nodo trasmette broadcast 802.11 e contemporaneamente cattura CSI sui frame ricevuti dagli altri due. Risultato: 9 coppie `(tx_node, rx_node)` con MAC **stabili** — niente piu' problemi di MAC randomization tipici dei pinger telefono.
 
-Compila e carica su ESP32.
+Per ogni board:
+
+1. Copia `firmware/esp32_radar3d/secrets.h.example` in `secrets.h` e mettici SSID/password del tuo WiFi 2.4 GHz
+2. Modifica `firmware/esp32_radar3d/network_config.h`:
+   - `#define NODE_ID 0` (oppure 1 o 2 per le altre due schede)
+   - `NODE_MACS[3][6]`: MAC delle 3 schede (vedi sezione "Scoprire i MAC" in FLASHING.md)
+   - `#define UDP_TARGET_IP "..."`: IP del PC che girera' la pipeline
+3. Arduino IDE → Tools > Board: **ESP32 Dev Module**, Upload Speed: **115200**
+4. Carica lo sketch
+5. Cambia `NODE_ID`, ricarica sulla scheda successiva. Ripeti per tutte e 3.
+
+**Legacy** (`firmware/esp32_csi_firmware/esp32_csi_firmware.ino`): firmware vecchio single-source con pinger esterni. Funziona ancora (UDP magic `0xC5110001`, pipeline retrocompatibile), ma soffre del problema MAC randomization sui telefoni.
 
 ### 2. Addestra un modello posizioni
 
@@ -142,17 +152,44 @@ Apri `radar_3d.html` senza WebSocket attivo: dopo 5s parte una simulazione (blob
 
 ### Diagnostica
 
-Se il blob "salta" o ha errori grandi, prima di ri-addestrare verifica che le sorgenti del modello combaciano con quelle attuali (MAC randomization è il problema più frequente con pinger telefono):
-
 ```bash
 python3 -m csi.diagnose_model
 ```
 
-Output: confronto fra le MAC salvate nel modello e quelle viste in tempo reale, frame per receiver, verdetto sulla compatibilità.
+Lo script ascolta 10s di UDP e stampa:
+- **Tipo di firmware rilevato**: radar3d cross-ping (`0xC5110003`) vs ADR-018 legacy (`0xC5110001`)
+- **Frame per ricevitore** (`NODE_ID 0/1/2`) — i 3 RX devono avere rate simili
+- **Frame per sorgente**: con radar3d sono le 9 coppie `rx{n}-tx{m}` attese; con legacy sono MAC dei pinger
+- **Verdetto**: compatibilità del modello salvato con il setup attuale (sorgenti riconosciute / mancanti / sconosciute)
+
+Con il firmware cross-ping `esp32_radar3d`, le sorgenti sono **stabili by design** (NODE_ID hardware, non MAC casualizzati): il `diagnose_model` ti dice se uno dei 3 nodi non sta trasmettendo o se il `NODE_MACS` in `network_config.h` non combacia coi MAC reali.
 
 ---
 
 ## Architecture
+
+### Cross-ping (firmware esp32_radar3d, default)
+
+```
+   ┌──────────┐      ┌──────────┐      ┌──────────┐
+   │ ESP32 #0 │ ←──→ │ ESP32 #1 │ ←──→ │ ESP32 #2 │   3 nodi che si pingano
+   └────┬─────┘      └────┬─────┘      └────┬─────┘   broadcast 802.11 @ 100Hz
+        │ UDP             │ UDP             │ UDP    canale 6 fisso, 9 canali (tx,rx)
+        └────────────────┬┴─────────────────┘
+                         ▼
+                  ┌─────────────────┐     WebSocket    ┌──────────┐
+                  │  PC centrale     │ ───────────────→│ Browser  │
+                  │  csi_mac.py /    │    JSON         │ heatmap  │
+                  │  blob_cli.py     │    position/    │ + radar  │
+                  │  + ML model      │    blob         │   3D     │
+                  └─────────────────┘                  └──────────┘
+```
+
+- Magic UDP: `0xC5110003`
+- Sorgenti: 9 coppie stabili `rx0-tx0 .. rx2-tx2`
+- Risolve definitivamente il problema MAC randomization
+
+### Legacy single-source (firmware esp32_csi_firmware)
 
 ```
 ┌──────────────┐     UDP/Serial     ┌──────────────┐     WebSocket     ┌──────────┐
@@ -166,6 +203,9 @@ Output: confronto fra le MAC salvate nel modello e quelle viste in tempo reale, 
                                      │  (joblib)    │
                                      └──────────────┘
 ```
+
+- Magic UDP: `0xC5110001`
+- Sorgenti: MAC dei pinger esterni (telefoni/laptop). Soggetto a MAC randomization.
 
 ### Data flow
 
@@ -284,7 +324,10 @@ Pipeline alternativa che funziona su UNO Q standalone (solo RSSI da `/proc/net/w
 
 | File | Descrizione |
 |---|---|
-| `esp32_csi_firmware/esp32_csi_firmware.ino` | Firmware ESP32: CSI capture, AP mode, UDP streaming |
+| `esp32_radar3d/esp32_radar3d.ino` | **DEFAULT** Firmware cross-ping multi-RX: 3 ESP32 si pingano fra loro, 9 canali stabili, UDP magic `0xC5110003` |
+| `esp32_radar3d/network_config.h` | Config per-board: `NODE_ID`, `NODE_MACS[3][6]`, `UDP_TARGET_IP` |
+| `esp32_radar3d/FLASHING.md` | Guida passo-passo per flash + scoperta MAC + posizionamento |
+| `esp32_csi_firmware/esp32_csi_firmware.ino` | Firmware legacy single-source (UDP magic `0xC5110001`). Funziona con pinger esterni. |
 
 ### `tests/` — Suite di test
 

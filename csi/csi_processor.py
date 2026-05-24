@@ -287,6 +287,107 @@ def parse_csi_line(line: str) -> dict | None:
 CSI_BINARY_MAGIC = 0xC5110001
 CSI_BINARY_HEADER_SIZE = 20
 
+# ============================================================
+# Radar3D cross-ping format — magic 0xC5110003 (LE u32)
+#   [0..3]   Magic: 0xC5110003
+#   [4]      TX node ID (0,1,2)        — chi ha trasmesso
+#   [5]      RX node ID (0,1,2)        — chi sta ricevendo (NODE_ID locale)
+#   [6..7]   Numero subcarrier (LE u16)
+#   [8..11]  Sequence number (LE u32)
+#   [12]     RSSI (i8)
+#   [13]     Noise floor (i8)
+#   [14..15] Reserved
+#   [16..23] Timestamp microsecondi (LE i64)
+#   [24..]   I/Q pairs (int8_t per subcarrier × 2 byte)
+#
+# 3 nodi che si pingano fra loro -> 9 coppie (tx_node, rx_node) -> 9 canali CSI.
+# A differenza del formato ADR-018, qui la "sorgente" del canale e' la COPPIA
+# (tx, rx), entrambe stabili (NODE_ID hardcoded, no MAC randomization).
+CSI_RADAR3D_MAGIC = 0xC5110003
+CSI_RADAR3D_HEADER_SIZE = 24
+
+
+def parse_csi_radar3d(data: bytes) -> dict | None:
+    """Parser per frame Radar 3D cross-ping (magic 0xC5110003).
+
+    Restituisce un dict frame compatibile con CSIClassifier / BlobRegressor:
+    - `mac` viene riempito con `pair_id` = "rx{rx}-tx{tx}" cosi' che le
+      pipeline esistenti (che raggruppano per `source_id` o `mac`)
+      vedono 9 sorgenti stabili.
+    - `ap_id` = rx_node (ricevitore), per compatibilita' Multi-AP classifier.
+
+    Args:
+        data: bytes del frame (min 24 byte header + I/Q pairs).
+
+    Returns:
+        dict con campi CSI, o None se formato non valido.
+    """
+    if len(data) < CSI_RADAR3D_HEADER_SIZE:
+        return None
+    magic = struct.unpack_from("<I", data, 0)[0]
+    if magic != CSI_RADAR3D_MAGIC:
+        return None
+
+    tx_node = data[4]
+    rx_node = data[5]
+    n_sub = struct.unpack_from("<H", data, 6)[0]
+    seq = struct.unpack_from("<I", data, 8)[0]
+    rssi = struct.unpack_from("<b", data, 12)[0]
+    noise = struct.unpack_from("<b", data, 13)[0]
+    # data[14..15] = reserved
+    ts_us = struct.unpack_from("<q", data, 16)[0]
+
+    if n_sub < 1 or n_sub > 512:
+        return None
+    expected_iq = n_sub * 2  # 1 I + 1 Q per subcarrier (single antenna)
+    if len(data) < CSI_RADAR3D_HEADER_SIZE + expected_iq:
+        return None
+
+    csi_data = []
+    for i in range(n_sub):
+        offset = CSI_RADAR3D_HEADER_SIZE + i * 2
+        real_v = float(struct.unpack_from("<b", data, offset)[0])
+        imag_v = float(struct.unpack_from("<b", data, offset + 1)[0])
+        ampl = sqrt(real_v ** 2 + imag_v ** 2)
+        phase = atan2(imag_v, real_v)
+        csi_data.append({
+            "subcarrier": i,
+            "real": real_v,
+            "imag": imag_v,
+            "ampl": round(ampl, 3),
+            "phase": round(phase, 4),
+        })
+
+    amps = [c["ampl"] for c in csi_data]
+
+    # Identificatore stabile della COPPIA tx->rx. Le pipeline a valle (che
+    # raggruppano per source_id/mac) lo trattano come fosse un singolo
+    # "trasmettitore virtuale" stabile.
+    pair_id = f"rx{rx_node}-tx{tx_node}"
+
+    return {
+        "seq": seq,
+        "mac": pair_id,           # stable, no randomization
+        "source_id": pair_id,     # preferito da CSIClassifier.train_custom
+        "rssi": rssi,
+        "noise_floor": noise,
+        "rate": 0,
+        "bandwidth": 20,
+        "num_subcarriers": n_sub,
+        "csi": csi_data,
+        "ampl_mean": round(mean(amps), 3),
+        "ampl_std": round(stdev(amps), 3) if len(amps) >= 2 else 0,
+        "ampl_max": round(max(amps), 3),
+        "ampl_min": round(min(amps), 3),
+        "ap_id": rx_node,         # per compatibilita' MultiAPCSIClassifier
+        "tx_node": tx_node,
+        "rx_node": rx_node,
+        "_radar3d": True,
+        "_node_id": rx_node,
+        "_pair_id": pair_id,
+        "_timestamp_us": ts_us,
+    }
+
 
 def parse_csi_binary(data: bytes) -> dict | None:
     """Parser per frame CSI binario in formato ADR-018.

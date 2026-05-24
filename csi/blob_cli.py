@@ -38,7 +38,13 @@ import time
 from collections import Counter
 from typing import Iterator
 
-from .csi_processor import parse_csi_binary, parse_csi_line
+from .csi_processor import (
+    parse_csi_binary,
+    parse_csi_line,
+    parse_csi_radar3d,
+    CSI_BINARY_MAGIC,
+    CSI_RADAR3D_MAGIC,
+)
 from .blob_regressor import BlobRegressor, BLOB_MODEL_PATH
 
 # Optional dependencies
@@ -54,7 +60,13 @@ except ImportError:
 # UDP source — riusa la stessa logica di csi_mac
 # ============================================================
 def udp_lines(port: int) -> Iterator[tuple[str | dict, str | None]]:
-    """Genera frame parsati dall'UDP. Yields dict (binario) o linea testo."""
+    """Genera frame parsati dall'UDP. Yields dict (binario) o linea testo.
+
+    Supporta:
+      - magic 0xC5110001 (ADR-018, vecchio firmware esp32_csi_firmware)
+      - magic 0xC5110003 (Radar3D cross-ping, firmware esp32_radar3d)
+      - testo "CSI:..." (Serial-mode legacy)
+    """
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(("0.0.0.0", port))
@@ -67,11 +79,18 @@ def udp_lines(port: int) -> Iterator[tuple[str | dict, str | None]]:
             data, _ = sock.recvfrom(65535)
         except socket.timeout:
             continue
-        if len(data) >= 4 and int.from_bytes(data[:4], "little") == 0xC5110001:
-            parsed = parse_csi_binary(data)
-            if parsed:
-                yield (parsed, None)
-                continue
+        if len(data) >= 4:
+            magic = int.from_bytes(data[:4], "little")
+            if magic == CSI_RADAR3D_MAGIC:
+                parsed = parse_csi_radar3d(data)
+                if parsed:
+                    yield (parsed, None)
+                    continue
+            elif magic == CSI_BINARY_MAGIC:
+                parsed = parse_csi_binary(data)
+                if parsed:
+                    yield (parsed, None)
+                    continue
         text_buf.extend(data)
         while b"\n" in text_buf:
             line, _, text_buf = text_buf.partition(b"\n")

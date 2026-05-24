@@ -23,7 +23,13 @@ import time
 from collections import Counter
 
 from . import csi_ml
-from .csi_processor import parse_csi_binary, parse_csi_line
+from .csi_processor import (
+    parse_csi_binary,
+    parse_csi_line,
+    parse_csi_radar3d,
+    CSI_BINARY_MAGIC,
+    CSI_RADAR3D_MAGIC,
+)
 
 
 def load_model_metadata(labels_path: str) -> dict:
@@ -48,8 +54,10 @@ def capture_udp(port: int, seconds: int) -> dict:
     print(f"\n  Ascolto frame UDP per {seconds}s su 0.0.0.0:{port}...")
 
     by_node: Counter = Counter()      # rx_node_id -> count
-    by_mac: Counter = Counter()       # source_mac -> count
-    pairs: Counter = Counter()        # (node_id, mac) -> count
+    by_mac: Counter = Counter()       # source_mac or pair_id -> count
+    pairs: Counter = Counter()        # (rx_node, source) -> count
+    n_radar3d = 0
+    n_adr018 = 0
     total = 0
     text_buf = bytearray()
 
@@ -60,12 +68,27 @@ def capture_udp(port: int, seconds: int) -> dict:
         except socket.timeout:
             continue
 
-        # Binary ADR-018?
         if len(data) >= 4:
             magic = int.from_bytes(data[:4], "little")
-            if magic == 0xC5110001:
+
+            # Radar3D cross-ping (nuovo firmware, magic 0xC5110003)
+            if magic == CSI_RADAR3D_MAGIC:
+                parsed = parse_csi_radar3d(data)
+                if parsed:
+                    n_radar3d += 1
+                    node_id = parsed.get("rx_node", -1)
+                    pair = parsed.get("_pair_id") or parsed.get("mac") or "(none)"
+                    by_node[node_id] += 1
+                    by_mac[pair] += 1
+                    pairs[(node_id, pair)] += 1
+                    total += 1
+                    continue
+
+            # ADR-018 (vecchio firmware esp32_csi_firmware, magic 0xC5110001)
+            if magic == CSI_BINARY_MAGIC:
                 parsed = parse_csi_binary(data)
                 if parsed:
+                    n_adr018 += 1
                     node_id = parsed.get("_node_id", parsed.get("ap_id", -1))
                     mac = parsed.get("mac") or "(none)"
                     by_node[node_id] += 1
@@ -74,7 +97,7 @@ def capture_udp(port: int, seconds: int) -> dict:
                     total += 1
                     continue
 
-        # Testo?
+        # Testo? (fallback legacy serial)
         text_buf.extend(data)
         while b"\n" in text_buf:
             line, _, text_buf = text_buf.partition(b"\n")
@@ -97,6 +120,8 @@ def capture_udp(port: int, seconds: int) -> dict:
         "by_node": dict(by_node),
         "by_mac": dict(by_mac),
         "pairs": pairs,
+        "n_radar3d": n_radar3d,
+        "n_adr018": n_adr018,
     }
 
 
@@ -135,6 +160,12 @@ def main() -> int:
     total = cap["total"]
     print(f"\n  Catturati {total} frame in {cap['seconds']}s "
           f"({total / cap['seconds']:.1f} Hz totale)")
+    if cap["n_radar3d"] or cap["n_adr018"]:
+        print(f"    Radar3D cross-ping (0xC5110003): {cap['n_radar3d']}")
+        print(f"    ADR-018 single-source (0xC5110001): {cap['n_adr018']}")
+
+    is_radar3d = cap["n_radar3d"] > cap["n_adr018"]
+    src_label = "coppia (rx-tx)" if is_radar3d else "MAC sorgente"
 
     # 3. Frame per RX (NODE_ID)
     print(f"\n  Frame per ricevitore (NODE_ID):")
@@ -146,29 +177,38 @@ def main() -> int:
             star = "" if rate > 10 else "  ← BASSO"
             print(f"    NODE_ID {node}: {cnt} frame ({rate:.1f} Hz){star}")
 
-    # 4. Frame per MAC pinger
-    print(f"\n  Frame per MAC sorgente (pinger):")
+    # 4. Frame per sorgente
+    print(f"\n  Frame per {src_label}:")
     if not cap["by_mac"]:
-        print(f"    NESSUN MAC pinger visto.")
+        print(f"    NESSUNA sorgente vista.")
     else:
-        sorted_macs = sorted(cap["by_mac"].items(), key=lambda x: -x[1])
-        for mac, cnt in sorted_macs[:10]:
+        sorted_src = sorted(cap["by_mac"].items(), key=lambda x: -x[1])
+        for src, cnt in sorted_src[:12]:
             rate = cnt / cap["seconds"]
-            mac_short = mac if len(mac) <= 17 else f"...{mac[-8:]}"
-            print(f"    {mac_short}: {cnt} frame ({rate:.1f} Hz)")
+            disp = src if len(src) <= 17 else f"...{src[-8:]}"
+            print(f"    {disp}: {cnt} frame ({rate:.1f} Hz)")
+
+    if is_radar3d:
+        expected = 9  # 3 RX × 3 TX
+        actual = len(cap["by_mac"]) - (1 if "(none)" in cap["by_mac"] else 0)
+        if actual < expected:
+            print(f"\n  ⚠ Attese {expected} coppie rx-tx, viste {actual}. "
+                  f"Verifica che TUTTI e 3 gli ESP32 siano accesi.")
+        else:
+            print(f"\n  ✓ {actual} coppie rx-tx attive (atteso {expected}).")
 
     # 5. Diagnostica match
     if meta and meta.get("known_sources"):
-        seen_macs = set(cap["by_mac"].keys()) - {"(none)"}
-        known_macs = set(meta["known_sources"])
+        seen_sources = set(cap["by_mac"].keys()) - {"(none)"}
+        known_sources = set(meta["known_sources"])
 
-        seen_known = seen_macs & known_macs
-        seen_unknown = seen_macs - known_macs
-        missing_known = known_macs - seen_macs
+        seen_known = seen_sources & known_sources
+        seen_unknown = seen_sources - known_sources
+        missing_known = known_sources - seen_sources
 
         print(f"\n  COMPATIBILITA' MODELLO vs SETUP ATTUALE:")
-        print(f"    Sorgenti note dal modello:    {len(known_macs)}")
-        print(f"    Sorgenti viste ora:           {len(seen_macs)}")
+        print(f"    Sorgenti note dal modello:    {len(known_sources)}")
+        print(f"    Sorgenti viste ora:           {len(seen_sources)}")
         print(f"    Sorgenti riconosciute:        {len(seen_known)}")
         print(f"    Sorgenti nuove (sconosciute): {len(seen_unknown)}")
         print(f"    Sorgenti mancanti:            {len(missing_known)}")
@@ -188,15 +228,24 @@ def main() -> int:
         print(f"\n  VERDETTO:")
         if not seen_known and missing_known:
             print(f"    ✗ CATASTROFE: nessuna sorgente del training e' attiva ora.")
-            print(f"      Probabilmente le MAC dei pinger sono cambiate (randomization).")
-            print(f"      Fix: re-train con questi pinger nello stato attuale.")
+            if is_radar3d:
+                print(f"      Le coppie rx-tx attese non arrivano. Cause possibili:")
+                print(f"      - Non tutti i 3 ESP32 sono accesi/connessi")
+                print(f"      - NODE_MACS in network_config.h diversi da quelli reali")
+                print(f"      - WIFI canale diverso dal CHANNEL del firmware (default 6)")
+            else:
+                print(f"      Probabilmente le MAC dei pinger sono cambiate (randomization).")
+                print(f"      Considera passare al firmware esp32_radar3d (cross-ping, MAC fissi).")
+            print(f"      Fix: re-train nello stato attuale dopo aver risolto.")
         elif missing_known and seen_known:
-            pct = len(seen_known) / len(known_macs) * 100
+            pct = len(seen_known) / len(known_sources) * 100
             print(f"    ⚠ PARZIALE: {pct:.0f}% delle sorgenti note sono attive.")
+            if is_radar3d:
+                print(f"      Manca uno o piu' ESP32 (NODE_ID {sorted(missing_known)}).")
             print(f"      Modello degradato. Re-train consigliato.")
         elif not missing_known:
             print(f"    ✓ OK: tutte le sorgenti note sono attive.")
-            print(f"      Se la predizione e' comunque cattiva, il problema NON e' MAC.")
+            print(f"      Se la predizione e' comunque cattiva, il problema NON e' la sorgente.")
             print(f"      Verifica: rate per RX bilanciato? Classi bilanciate nel training?")
 
     return 0
