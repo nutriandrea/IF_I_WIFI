@@ -30,8 +30,11 @@ import argparse
 import asyncio
 import glob
 import json
+import logging
 import os
 import signal
+
+logger = logging.getLogger(__name__)
 import socket
 import sys
 from csi import csi_processor as _cp
@@ -318,7 +321,7 @@ async def _ws_handler(ws):
         async for _ in ws:
             pass  # ignora messaggi in arrivo
     except Exception:
-        pass
+        logger.debug("WebSocket client disconnected")
     finally:
         _ws_clients.discard(ws)
 

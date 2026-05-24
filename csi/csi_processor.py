@@ -25,7 +25,9 @@ Dipendenze:
   scipy    (apt: python3-scipy,   per salvare .mat)
 """
 
-import socket, time, json, sys, os, re, argparse, struct
+import socket, time, json, sys, os, re, argparse, struct, logging
+
+logger = logging.getLogger(__name__)
 # msgpack: import lazy, serve solo a RouterClient (UNO Q bridge RPC).
 # Su Mac/host senza UNO Q importare csi_processor non deve richiedere msgpack.
 from datetime import datetime
@@ -571,7 +573,7 @@ def collect_csi(client: RouterClient, seconds: int, label: str,
     try:
         client.call("csi_clear")
     except Exception:
-        pass
+        logger.debug("csi_clear fallito (normale se nessun dato in buffer)")
 
     while time.time() - start < seconds:
         try:
@@ -614,7 +616,7 @@ def collect_csi(client: RouterClient, seconds: int, label: str,
                     parsed["_label"] = label
                     frames.append(parsed)
     except Exception:
-        pass
+        logger.debug("Errore durante raccolta frame (timeout o interruzione)")
 
     total_s = round(time.time() - start, 1)
     print(f"\n  Raccolti {len(frames)} frame in {total_s}s"
@@ -800,7 +802,7 @@ def cmd_monitor(client, use_ml: bool = False, ml_model_path: str | None = None):
     try:
         client.call("csi_clear")
     except Exception:
-        pass
+        logger.debug("csi_clear fallito (normale se nessun dato in buffer)")
 
     start = time.time()
     try:
@@ -834,9 +836,9 @@ def cmd_monitor(client, use_ml: bool = False, ml_model_path: str | None = None):
                                       f"{parsed.get('num_subcarriers', 0):>5} "
                                       f"{parsed.get('ampl_mean', 0):>10.2f} "
                                       f"{parsed.get('ampl_std', 0):>9.2f} "
-                                      f"{parsed.get('rssi', 0):>6}")
+                                       f"{parsed.get('rssi', 0):>6}")
             except Exception:
-                pass
+                logger.debug("Errore parsing frame in monitor live", exc_info=True)
             time.sleep(POLL_INTERVAL)
     except KeyboardInterrupt:
         print("\nInterrotto.")

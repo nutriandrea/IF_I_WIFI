@@ -38,12 +38,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import signal
 import socket
 import sys
-import threading
 import time
+
+logger = logging.getLogger(__name__)
 from collections import deque, defaultdict
 from typing import Any
 
@@ -164,7 +166,7 @@ class Broadcaster:
             async for _ in ws:
                 pass
         except Exception:
-            pass
+            logger.debug("WebSocket client disconnected")
         finally:
             self._clients.discard(ws)
 
