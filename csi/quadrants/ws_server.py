@@ -244,9 +244,9 @@ def main() -> int:
                     help="Window frames per presence + blob (default: 100 ~ 1s @ 100Hz)")
     ap.add_argument("--baseline-seconds", type=float, default=30.0,
                     help="Calibrazione baseline per presence (default: 30s)")
-ap.add_argument("--empty-mult", type=float, default=1.5,
+    ap.add_argument("--empty-mult", type=float, default=1.5,
                     help="Soglia EMPTY/STILL = baseline*N (default: 1.5; abbassa se rimane EMPTY)")
-ap.add_argument("--move-mult", type=float, default=3.0,
+    ap.add_argument("--move-mult", type=float, default=3.0,
                     help="Soglia STILL/MOTION = baseline*N (default: 3.0; abbassa se non vedi MOTION)")
     ap.add_argument("--min-intensity", type=float, default=1e-3,
                     help="Soglia minima varianza per emettere blob (default: 0.001)")
