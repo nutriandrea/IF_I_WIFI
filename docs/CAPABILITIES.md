@@ -34,7 +34,7 @@ Nessun ML, nessun training. Funziona con 1, 2 o 3 ESP32 (degradazione graduale).
 
 ```bash
 # Demo con dati simulati (zero HW)
-./tools/run_local.sh
+./experimental/run_local.sh
 
 # Con ESP32 reali: il ws_server include già PresenceDetector
 python3 -m csi.quadrants.ws_server \
@@ -323,14 +323,14 @@ Una caduta produce un **transiente rapido** nella varianza di fase: in ~200-400 
 
 | Modalità | HW |
 |----------|----|
-| Dati simulati | Nessuno (`./tools/run_local.sh`) |
+| Dati simulati | Nessuno (`./experimental/run_local.sh`) |
 | Dati reali | 3 ESP32 + ws_server |
 
 ### Comandi
 
 ```bash
 # Demo completa con simulazione (zero HW)
-./tools/run_local.sh
+./experimental/run_local.sh
 
 # Solo server (aspettando ESP32 reali)
 python3 -m csi.quadrants.ws_server \
@@ -419,7 +419,7 @@ Ogni ESP32:
 
 ```bash
 # Scoprire MAC delle 3 schede
-python3 tools/discover_macs.py
+python3 experimental/discover_macs.py
 
 # Verifica connessione
 # Collega un ESP32 via USB, apri serial monitor a 115200 baud

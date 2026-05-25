@@ -7,7 +7,7 @@ e csi_blob_live duplicavano la logica di stream con schemi divergenti.
 Schema messaggi (uno per type, broadcast a ~10 Hz):
 
   {"type":"hello",     "version":2}                              # all'apertura
-  {"type":"presence",  "state":"EMPTY|STATIONARY|MOVEMENT", ...} # da PresenceReading
+  {"type":"presence",  "state":"EMPTY|STILL|MOTION", ...} # da PresenceReading
   {"type":"position",  "x":..,"y":..,"x_std":..,"y_std":..,...}  # da BlobEstimate
   {"type":"cells",     "rows":N,"cols":M,"probas":{"rXcY":p},
                        "predicted":"rXcY","confidence":..}       # da CellProbabilities
@@ -99,7 +99,8 @@ def _parse_rx_positions(s: str) -> list[tuple[float, float]]:
 # ============================================================
 # UDP source (riusa parser)
 # ============================================================
-def udp_frame_loop(port: int, on_frame, stop_event: threading.Event) -> None:
+def udp_frame_loop(port: int, on_frame, stop_event: threading.Event,
+                   relay_port: int = 0) -> None:
     from csi.csi_processor import (
         parse_csi_radar3d, parse_csi_crossping, parse_csi_binary, parse_csi_line,
     )
@@ -113,6 +114,12 @@ def udp_frame_loop(port: int, on_frame, stop_event: threading.Event) -> None:
     text_buf = bytearray()
     print(f"  [ws] UDP in ascolto su :{port}", file=sys.stderr)
 
+    # UDP relay: forward raw frames to RuView Rust sensing-server
+    relay_sock = None
+    if relay_port > 0 and relay_port != port:
+        relay_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        print(f"  [ws] UDP relay attivo → :{relay_port}", file=sys.stderr)
+
     while not stop_event.is_set():
         try:
             data, _ = sock.recvfrom(65535)
@@ -120,6 +127,13 @@ def udp_frame_loop(port: int, on_frame, stop_event: threading.Event) -> None:
             continue
         except OSError:
             break
+
+        # Forward raw frame to Rust sensing-server
+        if relay_sock is not None:
+            try:
+                relay_sock.sendto(data, ("127.0.0.1", relay_port))
+            except OSError:
+                pass
 
         if len(data) >= 4:
             magic = int.from_bytes(data[:4], "little")
@@ -215,6 +229,8 @@ def main() -> int:
         description="WiFi Sensing — unified WebSocket server (presence + quadrants)",
     )
     ap.add_argument("--udp-port", type=int, default=5005)
+    ap.add_argument("--relay-port", type=int, default=0,
+                    help="Forward raw UDP frames to this port (e.g. RuView Rust sensing-server)")
     ap.add_argument("--ws-port", type=int, default=8765)
     ap.add_argument("--ws-host", type=str, default="0.0.0.0")
     ap.add_argument("--room", type=_parse_room, default=(6.0, 5.0),
@@ -228,10 +244,10 @@ def main() -> int:
                     help="Window frames per presence + blob (default: 100 ~ 1s @ 100Hz)")
     ap.add_argument("--baseline-seconds", type=float, default=30.0,
                     help="Calibrazione baseline per presence (default: 30s)")
-    ap.add_argument("--empty-mult", type=float, default=1.5,
-                    help="Soglia EMPTY/STATIONARY = baseline*N (default: 1.5; abbassa se rimane EMPTY)")
-    ap.add_argument("--move-mult", type=float, default=3.0,
-                    help="Soglia STATIONARY/MOVEMENT = baseline*N (default: 3.0; abbassa se non vedi MOVEMENT)")
+ap.add_argument("--empty-mult", type=float, default=1.5,
+                    help="Soglia EMPTY/STILL = baseline*N (default: 1.5; abbassa se rimane EMPTY)")
+ap.add_argument("--move-mult", type=float, default=3.0,
+                    help="Soglia STILL/MOTION = baseline*N (default: 3.0; abbassa se non vedi MOTION)")
     ap.add_argument("--min-intensity", type=float, default=1e-3,
                     help="Soglia minima varianza per emettere blob (default: 0.001)")
     ap.add_argument("--variance-power", type=float, default=1.0,
@@ -354,9 +370,10 @@ def main() -> int:
     time.sleep(0.3)  # let WS server bind before clients connect
 
     # ---- Start UDP receiver in background thread ----
+    relay_port = getattr(args, "relay_port", 0)
     udp_thread = threading.Thread(
         target=udp_frame_loop,
-        args=(args.udp_port, on_frame, stop_event),
+        args=(args.udp_port, on_frame, stop_event, relay_port),
         daemon=True,
     )
     udp_thread.start()

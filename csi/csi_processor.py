@@ -391,6 +391,31 @@ def parse_csi_radar3d(data: bytes) -> dict | None:
     }
 
 
+def parse_csi_crossping(data: bytes) -> dict | None:
+    """Parser per edge vitals packet (magic 0xC511_0002, 32 byte).
+
+    Wrapper che converte ``Esp32VitalsPacket`` in dict per retrocompatibilità
+    con codebase che importa ``parse_csi_crossping`` da questo modulo.
+    """
+    from csi.esp32_parser import parse_esp32_vitals
+    pkt = parse_esp32_vitals(data)
+    if pkt is None:
+        return None
+    return {
+        "node_id": pkt.node_id,
+        "presence": pkt.presence,
+        "fall_detected": pkt.fall_detected,
+        "motion": pkt.motion,
+        "breathing_rate_bpm": pkt.breathing_rate_bpm,
+        "heartrate_bpm": pkt.heartrate_bpm,
+        "rssi": pkt.rssi,
+        "n_persons": pkt.n_persons,
+        "motion_energy": pkt.motion_energy,
+        "presence_score": pkt.presence_score,
+        "timestamp_ms": pkt.timestamp_ms,
+    }
+
+
 def parse_csi_binary(data: bytes) -> dict | None:
     """Parser per frame CSI binario in formato ADR-018.
 

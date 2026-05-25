@@ -54,7 +54,7 @@ Ogni ESP32 ha un MAC unico stampato all'avvio. Per scoprirli senza fare 3 flash 
 
 Oppure usa il tool helper:
 ```bash
-PYTHONPATH=. python3 tools/discover_macs.py --port /dev/cu.usbserial-XXX
+PYTHONPATH=. python3 experimental/discover_macs.py --port /dev/cu.usbserial-XXX
 ```
 
 Questo:

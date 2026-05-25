@@ -417,6 +417,23 @@ Tutti i pinger devono fare `ping -i 0.02 <ip_di_un_ESP32>` per generare traffico
 
 ---
 
+## Rust Host
+
+A minimal Rust workspace for ESP32-S3 CSI capture + embedded-future:
+
+```bash
+cd host-rust
+cargo build --release -p ifi-cli
+./target/release/ifiwifi-capture --help
+```
+
+| Crate | Description |
+|-------|-------------|
+| `ifi-core` | `CsiFrame` codec (ADR-018), core types. Pure Rust, no allocator |
+| `ifi-dsp` | Streaming Hampel filter, coherence gate. Ported from RuView |
+| `ifi-transport` | UDP receiver + bounded ring buffer |
+| `ifi-cli` | `ifiwifi-capture` binary — single-binary UDP capture + logging |
+
 ## Documentation
 
 | File | Contents |
@@ -428,6 +445,10 @@ Tutti i pinger devono fare `ping -i 0.02 <ip_di_un_ESP32>` per generare traffico
 | [`docs/HARDWARE_SETUP.md`](docs/HARDWARE_SETUP.md) | Hardware requirements and setup guide |
 | [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | Debugging guide |
 | [`docs/TESTING.md`](docs/TESTING.md) | Test suite reference |
+| [`docs/csi-frame-format.md`](docs/csi-frame-format.md) | ADR-018 CSI frame wire format (header + payload I/Q) |
+| [`docs/hardware-support.md`](docs/hardware-support.md) | Hardware compatibility matrix (ESP32 variants, host platforms, UNO Q roadmap) |
+| [`docs/what-was-cut.md`](docs/what-was-cut.md) | Audit trail of what was cut from RuView and why |
+| [`docs/decisions/`](docs/decisions/) | Architecture Decision Records |
 | [`firmware/esp32_radar3d/FLASHING.md`](firmware/esp32_radar3d/FLASHING.md) | ESP32 firmware flashing guide |
 
 ---

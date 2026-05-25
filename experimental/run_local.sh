@@ -9,9 +9,9 @@
 # Quando premi Ctrl-C, killa entrambi.
 #
 # Uso:
-#   ./tools/run_local.sh
-#   ./tools/run_local.sh --no-3d
-#   ./tools/run_local.sh --no-browser
+#   ./experimental/run_local.sh
+#   ./experimental/run_local.sh --no-3d
+#   ./experimental/run_local.sh --no-browser
 
 set -euo pipefail
 
@@ -54,7 +54,7 @@ PIDS+=($!)
 sleep 1.5
 
 echo "==> Avvio inject_radar3d_frames (simulazione 3 ESP32 + movimento)"
-python3 tools/inject_radar3d_frames.py --port 5005 $INJECTOR_ARGS &
+python3 experimental/inject_radar3d_frames.py --port 5005 $INJECTOR_ARGS &
 PIDS+=($!)
 sleep 0.5
 

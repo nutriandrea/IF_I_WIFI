@@ -65,6 +65,31 @@ class PoseData(WsMessage):
     confidence: float = 0.0
 
 
+@dataclass(frozen=True)
+class NodeSensingInfo:
+    """Per-node amplitude snapshot from a Rust sensing-server broadcast."""
+    node_id: int = 0
+    rssi_dbm: float = 0.0
+    position: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    amplitude: tuple[float, ...] = ()
+    subcarrier_count: int = 0
+
+
+@dataclass(frozen=True)
+class SensingUpdate(WsMessage):
+    """Raw sensing broadcast from a RuView-compatible Rust sensing-server.
+
+    Carries per-subcarrier amplitudes (no phases) for each ESP32 node,
+    plus optional vital-sign estimates and multi-person detections.
+    """
+    timestamp: float = 0.0
+    source: str = ""
+    tick: int = 0
+    nodes: tuple[NodeSensingInfo, ...] = ()
+    persons: tuple[dict, ...] = ()
+    vital_signs: dict[str, Any] = field(default_factory=dict)
+
+
 # ─── Parsing ────────────────────────────────────────────────────────
 
 def _parse_message(raw: dict[str, Any]) -> WsMessage:
@@ -97,6 +122,28 @@ def _parse_message(raw: dict[str, Any]) -> WsMessage:
             timestamp=float(raw.get("timestamp", 0.0)),
             persons=raw.get("persons", []),
             confidence=float(raw.get("confidence", 0.0)),
+        )
+    elif msg_type == "sensing_update":
+        raw_nodes: list[dict] = raw.get("nodes", [])
+        nodes = tuple(
+            NodeSensingInfo(
+                node_id=int(n.get("node_id", 0)),
+                rssi_dbm=float(n.get("rssi_dbm", 0.0)),
+                position=tuple(n.get("position", [0.0, 0.0, 0.0])),
+                amplitude=tuple(n.get("amplitude", [])),
+                subcarrier_count=int(n.get("subcarrier_count", 0)),
+            )
+            for n in raw_nodes
+        )
+        raw_persons: list[dict] = raw.get("persons", [])
+        return SensingUpdate(
+            type=msg_type, raw=raw,
+            timestamp=float(raw.get("timestamp", 0.0)),
+            source=raw.get("source", ""),
+            tick=int(raw.get("tick", 0)),
+            nodes=nodes,
+            persons=tuple(raw_persons),
+            vital_signs=raw.get("vital_signs", {}),
         )
     else:
         return WsMessage(type=msg_type, raw=raw)

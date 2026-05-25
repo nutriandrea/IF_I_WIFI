@@ -135,7 +135,7 @@ PYTHONPATH=. python3 -m csi.quadrants.ws_server \
 
 # 2) In un SECONDO terminale, lancia il simulatore
 #    (finge che ci siano 3 ESP32 reali con una persona in movimento)
-PYTHONPATH=. python3 tools/inject_radar3d_frames.py --port 5005 --moving
+PYTHONPATH=. python3 experimental/inject_radar3d_frames.py --port 5005 --moving
 
 # Adesso nel terminale del server (quello del punto 1) dovresti vedere:
 #   [ws]  98.3 fps  paths= 9  state=EMPTY  blob=(3.0,2.5)
@@ -161,7 +161,7 @@ xdg-open mapping/ui.html  # Linux
 Esiste anche uno script che fa tutto in automatico:
 
 ```bash
-./tools/run_local.sh
+./experimental/run_local.sh
 ```
 
 Lancia server + simulatore + apre il browser. Premi Ctrl-C per fermare tutto.
@@ -173,7 +173,7 @@ Lancia server + simulatore + apre il browser. Premi Ctrl-C per fermare tutto.
 Se hai i 3 ESP32 fisici, **prima** di lanciare ws_server fai un check di sanità:
 
 ```bash
-PYTHONPATH=. python3 tools/diag_paths.py --seconds 10
+PYTHONPATH=. python3 experimental/diag_paths.py --seconds 10
 ```
 
 Questo tool ascolta i frame UDP per 10 secondi e stampa una **tabella 3×3** di chi sta parlando con chi:
@@ -208,9 +208,9 @@ Cosa significa:
 | 1 | Server termina subito, terminale torna al prompt | `websockets` non installato (causa #1 di problemi) | `pip install websockets` |
 | 2 | UI mostra "disconnesso. retry in 2s…" (rosso) | Il server non è in esecuzione, o WS porta sbagliata | Controlla che il terminale 1 (server) sia ancora vivo e mostri "WebSocket server su :8765" |
 | 3 | UI connessa, ma stato resta "UNKNOWN" e la barra calibrazione non sale | Il simulatore non sta inviando frame UDP (o porta sbagliata) | Verifica che il simulatore usi `--port 5005` (uguale a `--udp-port` del server) |
-| 4 | UI mostra "EMPTY" forever, blob non appare | Hai lanciato il simulatore senza `--moving` (sta inviando frame statici, varianza = 0) | Rilancia con `python3 tools/inject_radar3d_frames.py --port 5005 --moving` |
+| 4 | UI mostra "EMPTY" forever, blob non appare | Hai lanciato il simulatore senza `--moving` (sta inviando frame statici, varianza = 0) | Rilancia con `python3 experimental/inject_radar3d_frames.py --port 5005 --moving` |
 | 5 | Nel campo `diag` vedi `paths_active=0` | Frame UDP non arrivano al server (firewall? porta sbagliata?) | Test rapido: `nc -lu -p 5005` → se nemmeno questo riceve nulla, è firewall o porta. Se riceve → problema nel parser dei frame |
-| 6 | `paths_active=6` (su 9 attesi) o `7` o `8` | Uno dei 3 nodi non viene riconosciuto come TX (MAC sbagliato) o non sta ricevendo (UDP non parte) | Lancia `tools/diag_paths.py` per vedere quale TX/RX manca. Cause + fix in § 5b. |
+| 6 | `paths_active=6` (su 9 attesi) o `7` o `8` | Uno dei 3 nodi non viene riconosciuto come TX (MAC sbagliato) o non sta ricevendo (UDP non parte) | Lancia `experimental/diag_paths.py` per vedere quale TX/RX manca. Cause + fix in § 5b. |
 | 7 | Blob fermo al centro geometrico dei RX (es. (3.0, 1.7) con RX a (0.5,0.5)/(5.5,0.5)/(3.0,4.5)) | Le varianze dei 3 RX sono ~uguali → il centroide pesato collassa al centro. Spesso conseguenza del sintomo #6 OPPURE di bassa diversità spaziale | (a) Risolvi #6 prima. (b) Rilancia con `--variance-power 2.5` (amplifica le differenze). (c) Considera `--blob-baseline-seconds 20` per sottrarre il rumore di fondo per-RX. (d) Allontana fisicamente i 3 ESP32. |
 | 8 | `state=EMPTY` anche se ti muovi nella stanza | La calibrazione baseline ha imparato una soglia troppo alta (es. perché ti sei mosso durante i primi 30 s, o perché il CSI ha rumore di fondo notevole). | Rilancia con `--move-mult 2.0` (default 3.0) per essere più sensibile. Se non basta: `--move-mult 1.5`. In alternativa, ricalibra con stanza davvero vuota. |
 | 9 | `fps` esagerati (es. 3000+) nel log del server | (Risolto: era un bug nella misura, ora usa contatore 1s.) | Aggiorna alla versione corrente del branch. |
@@ -229,7 +229,7 @@ python3 -c "import asyncio, websockets; \
   asyncio.run((lambda: websockets.connect('ws://localhost:8765').__aenter__())())"
 
 # ⭐ Il tool più importante per debuggare hardware: tabella 3×3 dei percorsi
-PYTHONPATH=. python3 tools/diag_paths.py --seconds 10
+PYTHONPATH=. python3 experimental/diag_paths.py --seconds 10
 ```
 
 ### Tuning del ws_server per hardware reale
@@ -274,7 +274,7 @@ Mini-mappa dei file per chi vuole leggere il codice.
 | Parser CSI (radar3d + ADR-018 + testo) | [`csi/csi_processor.py`](../csi/csi_processor.py) | [`tests/test_csi_processor.py`](../tests/test_csi_processor.py) |
 | Frontend canvas 2D + Three.js 3D | [`mapping/ui.html`](../mapping/ui.html) | manuale |
 | Firmware ESP32 (cross-ping) | [`firmware/esp32_radar3d/esp32_radar3d.ino`](../firmware/esp32_radar3d/esp32_radar3d.ino) | hardware |
-| Simulatore UDP per CI/dev | [`tools/inject_radar3d_frames.py`](../tools/inject_radar3d_frames.py) | usato dai test integration |
+| Simulatore UDP per CI/dev | [`experimental/inject_radar3d_frames.py`](../experimental/inject_radar3d_frames.py) | usato dai test integration |
 
 ### Suite di test (194/194 ✓)
 

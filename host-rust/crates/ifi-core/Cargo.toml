@@ -1,0 +1,19 @@
+[package]
+name = "ifi-core"
+description = "Core types and ADR-018 binary CSI frame codec for IF I WIFI."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["std"]
+# Enabling `std` adds the high-level Error trait integration; disabling it
+# makes the crate compilable on no_std hosts (e.g. embedded receivers).
+std = []
+
+[dependencies]
+thiserror = { workspace = true, optional = true }
+
+[dev-dependencies]

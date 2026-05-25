@@ -111,7 +111,7 @@ pip install websockets numpy scikit-learn joblib msgpack pyserial
 Pacchetti per funzionalità:
 - `numpy` + `scikit-learn` + `joblib` → ML (regressor, Kalman)
 - `websockets` → `ws_server.py`
-- `pyserial` → `csi_mac.py`, `csi_record.py`, `tools/discover_macs.py`
+- `pyserial` → `csi_mac.py`, `csi_record.py`, `experimental/discover_macs.py`
 - `msgpack` → solo se usi `csi_processor.py` con `RouterClient` (UNO Q bridge)
 
 ---
@@ -148,7 +148,7 @@ Quando lo stack reale ha problemi e vuoi isolare se il problema è hardware o so
 PYTHONPATH=. python3 -m csi.quadrants.ws_server --quiet
 
 # Terminale 2: simula movimento da un punto fisso
-PYTHONPATH=. python3 tools/inject_radar3d_frames.py --moving --port 5005
+PYTHONPATH=. python3 experimental/inject_radar3d_frames.py --moving --port 5005
 
 # Apri ui.html → se vedi il blob muoversi: la pipeline software è sana,
 # il problema è nei dati reali (probabilmente hardware o configurazione).

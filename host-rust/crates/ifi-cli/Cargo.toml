@@ -1,0 +1,19 @@
+[package]
+name = "ifi-cli"
+description = "ifiwifi-capture binary: listen on UDP, decode ADR-018 frames, print stats."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "ifiwifi-capture"
+path = "src/main.rs"
+
+[dependencies]
+ifi-core      = { workspace = true }
+ifi-dsp       = { workspace = true }
+ifi-transport = { workspace = true }
+clap          = { workspace = true }
+thiserror     = { workspace = true }

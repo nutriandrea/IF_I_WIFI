@@ -319,9 +319,42 @@ async with client:
     async for msg in client.stream():
         if isinstance(msg, EdgeVitals):
             print(f"BR={msg.breathing_rate_bpm}, HR={msg.heartrate_bpm}")
+        elif isinstance(msg, SensingUpdate):
+            for node in msg.nodes:
+                print(f"Node {node.node_id}: {len(node.amplitude)} subcarriers")
 ```
 
-Message types: `EdgeVitals`, `ConnectionEstablished`, `PoseData`, `WsMessage` (fallback).
+### Message Types
+
+| Class | `type` field | Source | Key Fields |
+|-------|-------------|--------|------------|
+| `ConnectionEstablished` | `connection_established` | Any RuView server | `node_id`, `version`, `capabilities` |
+| `EdgeVitals` | `edge_vitals` | Python pipelines | `node_id`, `presence`, `breathing_rate_bpm`, `heartrate_bpm`, `motion`, `fall_detected` |
+| `PoseData` | `pose_data` | Python pipelines | `node_id`, `timestamp`, `persons`, `confidence` |
+| `SensingUpdate` | `sensing_update` | Rust sensing-server | `timestamp`, `source`, `tick`, `nodes`, `vital_signs` |
+
+### `SensingUpdate`
+Raw sensing broadcast from the Rust `sensing-server`. Carries per-subcarrier amplitudes (no phases) for each ESP32 node.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `timestamp` | `float` | UNIX timestamp |
+| `source` | `str` | Data source (`"esp32"`, `"simulate"`) |
+| `tick` | `int` | Frame counter |
+| `nodes` | `tuple[NodeSensingInfo, ...]` | Per-node amplitude data |
+| `persons` | `tuple[dict, ...]` | Multi-person detections (optional) |
+| `vital_signs` | `dict` | Breathing rate, heart rate, confidence |
+
+### `NodeSensingInfo`
+Per-node amplitude snapshot.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `node_id` | `int` | ESP32 node identifier |
+| `rssi_dbm` | `float` | RSSI in dBm |
+| `position` | `tuple[float, float, float]` | Node position (x, y, z) |
+| `amplitude` | `tuple[float, ...]` | Per-subcarrier amplitudes |
+| `subcarrier_count` | `int` | Number of subcarriers |
 
 ## csi.services
 
