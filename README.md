@@ -1,4 +1,10 @@
-# Arduino Wi-Fi Sensing
+# IF_I_WIFI — WiFi Sensing # Arduino Wi-Fi Sensing Human Presence Detection
+
+[![Python](https://img.shields.io/badge/Python-3.10+-3776AB)]
+[![ESP32](https://img.shields.io/badge/Hardware-ESP32-E7352C)]
+[![ML](https://img.shields.io/badge/ML-Scikit--learn-FF6F00)]
+[![License](https://img.shields.io/badge/License-MIT-yellow)]
+
 
 > **Human presence, position, vitals (breathing + heart rate), and sleep analysis from everyday Wi-Fi.**
 > ESP32 captures Channel State Information (CSI) → host processes it → browser shows heatmap, radar 3D, and vitals.
