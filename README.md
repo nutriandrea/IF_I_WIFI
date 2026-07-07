@@ -1,4 +1,4 @@
-# IF_I_WIFI - WiFi Sensing # IF_I_WIFI — WiFi Sensing # Arduino Wi-Fi Sensing Human Presence Detection Human Presence Detection
+# IF_I_WIFI — WiFi Sensing & Human Presence Detection
 
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB)]
 [![ESP32](https://img.shields.io/badge/Hardware-ESP32-E7352C)]
