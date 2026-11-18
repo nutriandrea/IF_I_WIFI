@@ -489,10 +489,10 @@ export class PoseService {
 
   // Convert zone-based WebSocket data to REST API format
   convertZoneDataToRestFormat(zoneData, zoneId, originalMessage) {
-    console.log('🔧 Converting zone data:', { zoneData, zoneId, originalMessage });
+    console.log(' Converting zone data:', { zoneData, zoneId, originalMessage });
     
     if (!zoneData || !zoneData.pose) {
-      console.log('⚠️ No pose data in zone data, returning empty result');
+      console.log('[WARN] No pose data in zone data, returning empty result');
       return {
         timestamp: originalMessage.timestamp || new Date().toISOString(),
         frame_id: `ws_frame_${Date.now()}`,
@@ -521,7 +521,7 @@ export class PoseService {
     if (zoneId && persons.length > 0) {
       zoneSummary[zoneId] = persons.length;
     }
-    console.log('📍 Zone summary:', zoneSummary);
+    console.log(' Zone summary:', zoneSummary);
 
     const result = {
       timestamp: originalMessage.timestamp || new Date().toISOString(),
@@ -539,7 +539,7 @@ export class PoseService {
       }
     };
     
-    console.log('✅ Final converted result:', result);
+    console.log('[OK] Final converted result:', result);
     return result;
   }
 

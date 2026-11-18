@@ -120,7 +120,7 @@ def test_regressor_training_inference():
 
     _cleanup_paths()
 
-    print(f"  ✅ Training+inferenza: x={pe.x:.3f} y={pe.y:.3f}")
+    print(f"  [OK] Training+inferenza: x={pe.x:.3f} y={pe.y:.3f}")
     return reg
 
 
@@ -153,7 +153,7 @@ def test_kalman_smoothing_pipeline():
 
     _cleanup_paths()
 
-    print(f"  ✅ Kalman smoothing: {len(estimates)} stime, {inversions} inversioni su {len(xs)}")
+    print(f"  [OK] Kalman smoothing: {len(estimates)} stime, {inversions} inversioni su {len(xs)}")
     return estimates
 
 
@@ -178,7 +178,7 @@ def test_multi_persona_pipeline():
 
     _cleanup_paths()
 
-    print(f"  ✅ Multi-albero: (x={pe.x:.3f}, y={pe.y:.3f}) "
+    print(f"  [OK] Multi-albero: (x={pe.x:.3f}, y={pe.y:.3f}) "
           f"std=({pe.x_std:.3f}, {pe.y_std:.3f})")
     return pe
 
@@ -214,7 +214,7 @@ def test_save_load_cycle():
 
     _cleanup_paths()
 
-    print(f"  ✅ Save/load: OK (stima x={pe2.x:.3f} y={pe2.y:.3f})")
+    print(f"  [OK] Save/load: OK (stima x={pe2.x:.3f} y={pe2.y:.3f})")
 
 
 # ============================================================
@@ -230,4 +230,4 @@ if __name__ == "__main__":
     test_save_load_cycle()
 
     _cleanup_paths()
-    print(f"\n✅ Tutti i test superati.")
+    print(f"\n[OK] Tutti i test superati.")

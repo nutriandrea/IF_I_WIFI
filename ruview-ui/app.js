@@ -79,7 +79,7 @@ class WiFiDensePoseApp {
     const useMock = await backendDetector.shouldUseMockServer();
     
     if (useMock) {
-      console.log('🧪 Initializing with mock server for testing');
+      console.log(' Initializing with mock server for testing');
       // Import and start mock server only when needed
       const { mockServer } = await import('./utils/mock-server.js');
       mockServer.start();
@@ -87,14 +87,14 @@ class WiFiDensePoseApp {
       // Show notification to user
       this.showBackendStatus('Mock server active - testing mode', 'warning');
     } else {
-      console.log('🔌 Connecting to backend...');
+      console.log(' Connecting to backend...');
 
       try {
         const health = await healthService.checkLiveness();
-        console.log('✅ Backend responding:', health);
+        console.log('[OK] Backend responding:', health);
         this.showBackendStatus('Connected to Rust sensing server', 'success');
       } catch (error) {
-        console.warn('⚠️ Backend not available:', error.message);
+        console.warn('[WARN] Backend not available:', error.message);
         this.showBackendStatus('Backend unavailable — start sensing-server', 'warning');
       }
 

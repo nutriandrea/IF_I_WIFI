@@ -121,15 +121,15 @@ export class PoseRenderer {
       // Clear canvas
       this.clearCanvas();
       
-      console.log('🎨 [RENDERER] Rendering pose data:', poseData);
+      console.log(' [RENDERER] Rendering pose data:', poseData);
       
       if (!poseData || !poseData.persons) {
-        console.log('⚠️ [RENDERER] No pose data or persons array');
+        console.log('[WARN] [RENDERER] No pose data or persons array');
         this.renderNoDataMessage();
         return;
       }
       
-      console.log(`👥 [RENDERER] Found ${poseData.persons.length} persons to render`);
+      console.log(` [RENDERER] Found ${poseData.persons.length} persons to render`);
 
       // Render based on mode
       switch (this.config.mode) {
@@ -177,13 +177,13 @@ export class PoseRenderer {
   renderSkeletonMode(poseData, metadata) {
     const persons = poseData.persons || [];
     
-    console.log(`🦴 [RENDERER] Skeleton mode: processing ${persons.length} persons`);
+    console.log(` [RENDERER] Skeleton mode: processing ${persons.length} persons`);
     
     persons.forEach((person, index) => {
-      console.log(`👤 [RENDERER] Person ${index}:`, person);
+      console.log(` [RENDERER] Person ${index}:`, person);
       
       if (person.confidence < this.config.confidenceThreshold) {
-        console.log(`❌ [RENDERER] Skipping person ${index} - low confidence: ${person.confidence} < ${this.config.confidenceThreshold}`);
+        console.log(`[ERROR] [RENDERER] Skipping person ${index} - low confidence: ${person.confidence} < ${this.config.confidenceThreshold}`);
         return; // Skip low confidence detections
       }
 
@@ -202,13 +202,13 @@ export class PoseRenderer {
 
       // Render bounding box
       if (this.config.showBoundingBox && person.bbox) {
-        console.log(`📦 [RENDERER] Rendering bounding box for person ${index}`);
+        console.log(` [RENDERER] Rendering bounding box for person ${index}`);
         this.renderBoundingBox(person.bbox, person.confidence, index);
       }
 
       // Render confidence score
       if (this.config.showConfidence) {
-        console.log(`📊 [RENDERER] Rendering confidence score for person ${index}`);
+        console.log(` [RENDERER] Rendering confidence score for person ${index}`);
         this.renderConfidenceScore(person, index);
       }
     });
@@ -567,7 +567,7 @@ export class PoseRenderer {
 
   // Test method to verify canvas is working
   renderTestShape() {
-    console.log('🔧 [RENDERER] Rendering test shape');
+    console.log(' [RENDERER] Rendering test shape');
     this.clearCanvas();
     
     // Draw a test rectangle
@@ -585,7 +585,7 @@ export class PoseRenderer {
     this.ctx.font = '16px Arial';
     this.ctx.fillText('Canvas Test', 50, 200);
     
-    console.log('✅ [RENDERER] Test shape rendered');
+    console.log('[OK] [RENDERER] Test shape rendered');
   }
 
   // Utility methods

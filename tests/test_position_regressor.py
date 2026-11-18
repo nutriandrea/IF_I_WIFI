@@ -306,4 +306,4 @@ if __name__ == "__main__":
     test_regressor_kalman_integration()
 
     _cleanup()
-    print(f"\n✅ Tutti i test superati.")
+    print(f"\n[OK] Tutti i test superati.")

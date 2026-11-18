@@ -156,7 +156,7 @@ def _record_loop(it, out_dir, rotate_every, dry_run, no_rotate):
           f"{parse_err} CSI ERR in {elapsed:.0f}s ({parse_ok/max(elapsed,1):.0f} fps)",
           file=sys.stderr)
     if parse_err > 0:
-        print(f"  ⚠  {parse_err} linee CSI non parse — formato inatteso?",
+        print(f"  [WARN]  {parse_err} linee CSI non parse — formato inatteso?",
               file=sys.stderr)
     return 0
 
@@ -270,7 +270,7 @@ def cmd_record(args) -> int:
           f"{parse_err} CSI ERR in {elapsed:.0f}s ({parse_ok/max(elapsed,1):.0f} fps)",
           file=sys.stderr)
     if parse_err > 0:
-        print(f"  ⚠  {parse_err} linee CSI non parse — formato inatteso?",
+        print(f"  [WARN]  {parse_err} linee CSI non parse — formato inatteso?",
               file=sys.stderr)
     return 0
 

@@ -849,7 +849,7 @@ export class PoseDetectionCanvas {
     this.startDemoAnimation();
     
     // Show demo notification
-    this.showDemoNotification('🎭 Animated Demo Active - Walking, Waving & Dancing');
+    this.showDemoNotification(' Animated Demo Active - Walking, Waving & Dancing');
   }
 
   stopDemo() {
@@ -1135,7 +1135,7 @@ export class PoseDetectionCanvas {
     }));
   }
 
-  showDemoNotification(message = '🎭 Demo Mode Active') {
+  showDemoNotification(message = ' Demo Mode Active') {
     const notification = document.createElement('div');
     notification.style.cssText = `
       position: absolute;
@@ -1236,7 +1236,7 @@ export class PoseDetectionCanvas {
       <div class="settings-modal-overlay">
         <div class="settings-modal-dialog">
           <div class="settings-modal-header">
-            <h2>⚙️ Pose Detection Settings</h2>
+            <h2> Pose Detection Settings</h2>
             <button class="settings-modal-close" type="button">×</button>
           </div>
           <div class="settings-modal-body" id="settings-container-${this.containerId}">

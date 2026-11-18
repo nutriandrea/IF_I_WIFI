@@ -115,7 +115,7 @@ function init() {
     if (!url) return;
     connectWsBtn.textContent = 'Connecting...';
     const ok = await csiSimulator.connectLive(url);
-    connectWsBtn.textContent = ok ? '✓ Connected' : 'Connect';
+    connectWsBtn.textContent = ok ? '[OK] Connected' : 'Connect';
     if (ok) {
       connectWsBtn.classList.add('active');
     }
@@ -141,7 +141,7 @@ function init() {
   if (wsUrlInput) wsUrlInput.value = defaultWsUrl;
   csiSimulator.connectLive(defaultWsUrl).then(ok => {
     if (ok && connectWsBtn) {
-      connectWsBtn.textContent = '✓ Live ESP32';
+      connectWsBtn.textContent = '[OK] Live ESP32';
       connectWsBtn.classList.add('active');
       statusLabel.textContent = 'LIVE CSI';
       statusDot.classList.remove('offline');

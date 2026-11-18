@@ -142,7 +142,7 @@ export class DashboardTab {
       
       const featureStatusSpan = document.createElement('span');
       featureStatusSpan.className = 'feature-status';
-      featureStatusSpan.textContent = enabled ? '✓' : '✗';
+      featureStatusSpan.textContent = enabled ? '[OK]' : '[ERROR]';
       
       featureElement.appendChild(featureNameSpan);
       featureElement.appendChild(featureStatusSpan);

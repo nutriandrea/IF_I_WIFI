@@ -253,7 +253,7 @@ def cmd_train(args) -> int:
             print(f"  {k}: {v}")
 
     blob.save()
-    print(f"\n  ✓ Modello salvato in {BLOB_MODEL_PATH}")
+    print(f"\n  [OK] Modello salvato in {BLOB_MODEL_PATH}")
     return 0
 
 

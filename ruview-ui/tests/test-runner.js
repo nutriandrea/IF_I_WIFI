@@ -69,13 +69,13 @@ class TestRunner {
       
       test.status = 'pass';
       this.results.passed++;
-      this.log(`  ✓ PASS (${duration}ms)`);
+      this.log(`  [OK] PASS (${duration}ms)`);
       
     } catch (error) {
       test.status = 'fail';
       test.error = error.message;
       this.results.failed++;
-      this.log(`  ✗ FAIL: ${error.message}`);
+      this.log(`  [ERROR] FAIL: ${error.message}`);
       
     } finally {
       this.results.total++;

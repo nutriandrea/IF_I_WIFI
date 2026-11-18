@@ -190,7 +190,7 @@ def write_updated_macs(config_path: str, macs: list[str | None],
 
     with open(config_path, "w") as f:
         f.write(new_text)
-    print(f"  ✓ {config_path} aggiornato.", file=sys.stderr)
+    print(f"  [OK] {config_path} aggiornato.", file=sys.stderr)
 
 
 # ============================================================
@@ -237,7 +237,7 @@ def main() -> int:
         print(f"    - lo Serial Monitor in Arduino IDE è chiuso?", file=sys.stderr)
         return 1
 
-    print(f"\n  ✓ MAC trovato: {mac}", file=sys.stderr)
+    print(f"\n  [OK] MAC trovato: {mac}", file=sys.stderr)
 
     # Determina il node target
     if args.node is not None:

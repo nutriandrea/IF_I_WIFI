@@ -419,13 +419,13 @@
                 const useMock = await backendDetector.shouldUseMockServer();
                 
                 if (isAvailable && !useMock) {
-                    showTestStatus('✅ Real backend is available and being used', 'success');
+                    showTestStatus('[OK] Real backend is available and being used', 'success');
                     updateMockIndicator(false);
                 } else if (useMock) {
-                    showTestStatus('🧪 Using mock server (testing mode)', 'success');
+                    showTestStatus(' Using mock server (testing mode)', 'success');
                     updateMockIndicator(true);
                 } else {
-                    showTestStatus('❌ Backend unavailable, mock server available', 'error');
+                    showTestStatus('[ERROR] Backend unavailable, mock server available', 'error');
                     updateMockIndicator(false);
                 }
             } catch (error) {

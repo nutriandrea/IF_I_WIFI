@@ -497,11 +497,11 @@ def main() -> int:
                         missing_tx = [t for t in range(len(args.rx)) if t not in by_tx]
                         missing_rx = [r for r in range(len(args.rx)) if r not in by_rx]
                         if missing_tx:
-                            warn += f"  ⚠ TX mancanti: {missing_tx}"
+                            warn += f"  [WARN] TX mancanti: {missing_tx}"
                         if missing_rx:
-                            warn += f"  ⚠ RX mancanti: {missing_rx}"
+                            warn += f"  [WARN] RX mancanti: {missing_rx}"
                     if blob_stuck_at_center:
-                        warn += "  ⚠ blob fermo al centro geometrico"
+                        warn += "  [WARN] blob fermo al centro geometrico"
                     print(
                         f"  [ws] {rate_hz:6.1f} fps  paths={len(paths_seen):>2}/{expected_paths}  "
                         f"state={pres.state.value:<10}  "

@@ -20,7 +20,7 @@ export class BackendDetector {
     }
 
     try {
-      console.log('🔍 Checking backend availability...');
+      console.log(' Checking backend availability...');
       
       // Try to connect to the health endpoint with a short timeout
       const controller = new AbortController();
@@ -39,7 +39,7 @@ export class BackendDetector {
       if (response.ok) {
         this.isBackendAvailable = true;
         this.lastCheck = now;
-        console.log('✅ Real backend is available');
+        console.log('[OK] Real backend is available');
         return true;
       } else {
         throw new Error(`Backend responded with status ${response.status}`);
@@ -50,9 +50,9 @@ export class BackendDetector {
       this.lastCheck = now;
       
       if (error.name === 'AbortError') {
-        console.log('⏱️ Backend check timed out - assuming unavailable');
+        console.log('⏱ Backend check timed out - assuming unavailable');
       } else {
-        console.log(`❌ Backend unavailable: ${error.message}`);
+        console.log(`[ERROR] Backend unavailable: ${error.message}`);
       }
       
       return false;
@@ -63,13 +63,13 @@ export class BackendDetector {
   async shouldUseMockServer() {
     // If mock is explicitly enabled, always use it
     if (API_CONFIG.MOCK_SERVER.ENABLED) {
-      console.log('🧪 Using mock server (explicitly enabled)');
+      console.log(' Using mock server (explicitly enabled)');
       return true;
     }
 
     // If auto-detection is disabled, never use mock
     if (!API_CONFIG.MOCK_SERVER.AUTO_DETECT) {
-      console.log('🔌 Using real backend (auto-detection disabled)');
+      console.log(' Using real backend (auto-detection disabled)');
       return false;
     }
 
@@ -77,10 +77,10 @@ export class BackendDetector {
     const backendAvailable = await this.checkBackendAvailability();
     
     if (backendAvailable) {
-      console.log('🔌 Using real backend (detected and available)');
+      console.log(' Using real backend (detected and available)');
       return false;
     } else {
-      console.log('🧪 Using mock server (backend unavailable)');
+      console.log(' Using mock server (backend unavailable)');
       return true;
     }
   }

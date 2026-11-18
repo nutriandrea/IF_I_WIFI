@@ -19,16 +19,16 @@ export const ServerUrlInput = ({ value, onChange, onSave }: ServerUrlInputProps)
 
   const handleTest = async () => {
     if (!validation.valid) {
-      setTestResult('✗ Invalid URL');
+      setTestResult('[ERROR] Invalid URL');
       return;
     }
 
     const start = Date.now();
     try {
       await apiService.getStatus();
-      setTestResult(`✓ ${Date.now() - start}ms`);
+      setTestResult(`[OK] ${Date.now() - start}ms`);
     } catch {
-      setTestResult('✗ Failed');
+      setTestResult('[ERROR] Failed');
     }
   };
 

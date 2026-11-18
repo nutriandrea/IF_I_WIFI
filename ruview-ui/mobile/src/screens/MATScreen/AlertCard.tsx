@@ -28,7 +28,7 @@ const resolveSeverity = (alert: Alert): SeverityMeta => {
   if (alert.priority === AlertPriority.High) {
     return {
       label: 'HIGH',
-      icon: '⚠',
+      icon: '[WARN]',
       color: colors.warn,
     };
   }

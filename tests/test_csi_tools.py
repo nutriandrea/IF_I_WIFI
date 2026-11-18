@@ -60,7 +60,7 @@ def test_record_info_roundtrip():
     finally:
         os.unlink(fpath)
 
-    print("  ✅ test_record_info_roundtrip")
+    print("  [OK] test_record_info_roundtrip")
 
 
 def test_info_statistics():
@@ -84,7 +84,7 @@ def test_info_statistics():
     finally:
         os.unlink(fpath)
 
-    print("  ✅ test_info_statistics")
+    print("  [OK] test_info_statistics")
 
 
 def test_replay_stdout():
@@ -120,7 +120,7 @@ def test_replay_stdout():
     finally:
         os.unlink(fpath)
 
-    print("  ✅ test_replay_stdout")
+    print("  [OK] test_replay_stdout")
 
 
 def test_replay_rate_limited():
@@ -145,7 +145,7 @@ def test_replay_rate_limited():
     finally:
         os.unlink(fpath)
 
-    print("  ✅ test_replay_rate_limited")
+    print("  [OK] test_replay_rate_limited")
 
 
 def test_replay_parse_multi_ap():
@@ -171,7 +171,7 @@ def test_replay_parse_multi_ap():
     finally:
         os.unlink(fpath)
 
-    print("  ✅ test_replay_parse_multi_ap")
+    print("  [OK] test_replay_parse_multi_ap")
 
 
 def test_plot_class_instantiation():
@@ -198,7 +198,7 @@ def test_plot_class_instantiation():
     assert bp.n_sub > 0
 
     plt.close("all")
-    print("  ✅ test_plot_class_instantiation")
+    print("  [OK] test_plot_class_instantiation")
 
 
 def test_plot_update_bar():
@@ -225,7 +225,7 @@ def test_plot_update_bar():
     assert len(bp.bars) == 8
 
     plt.close("all")
-    print("  ✅ test_plot_update_bar")
+    print("  [OK] test_plot_update_bar")
 
 
 def test_plot_update_waterfall():
@@ -247,7 +247,7 @@ def test_plot_update_waterfall():
     assert len(wf.buffer) == 1
 
     plt.close("all")
-    print("  ✅ test_plot_update_waterfall")
+    print("  [OK] test_plot_update_waterfall")
 
 
 # ── main ─────────────────────────────────────────────────
@@ -271,7 +271,7 @@ def main():
             t()
             passed += 1
         except Exception as e:
-            print(f"  ❌ {t.__name__}: {e}")
+            print(f"  [ERROR] {t.__name__}: {e}")
             import traceback
             traceback.print_exc()
             failed += 1
