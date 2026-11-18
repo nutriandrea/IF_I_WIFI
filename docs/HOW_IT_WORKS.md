@@ -189,7 +189,7 @@ Questo tool ascolta i frame UDP per 10 secondi e stampa una **tabella 3×3** di 
 │ RX2 │  98.7 fps      │  ---           │  99.2 fps      │
 │     │ var=7.6        │                │ var=12.9       │
 └─────┴────────────────┴────────────────┴────────────────┘
-6 paths attivi · ⚠ TX1 NON VISIBILE
+6 paths attivi ·  TX1 NON VISIBILE
 ```
 
 Cosa significa:
@@ -276,7 +276,7 @@ Mini-mappa dei file per chi vuole leggere il codice.
 | Firmware ESP32 (cross-ping) | [`firmware/esp32_radar3d/esp32_radar3d.ino`](../firmware/esp32_radar3d/esp32_radar3d.ino) | hardware |
 | Simulatore UDP per CI/dev | [`experimental/inject_radar3d_frames.py`](../experimental/inject_radar3d_frames.py) | usato dai test integration |
 
-### Suite di test (194/194 ✓)
+### Suite di test (194/194 )
 
 ```bash
 for t in tests/test_*.py; do
